@@ -1,5 +1,11 @@
 # @dskripchenko/code-editor
 
+## 0.1.2
+
+### Patch Changes
+
+- 6d20fea: `editorConfigFor` reads the files of directories given in Windows form (backslashes): their text was looked up by the path after it had been rewritten with forward slashes, and found empty.
+
 ## 0.1.1
 
 ### Patch Changes
