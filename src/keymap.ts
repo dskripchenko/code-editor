@@ -7,7 +7,20 @@
 import * as c from './commands'
 import type { Command } from './commands'
 
-export type KeyAction = Command | 'undo' | 'redo' | 'copy' | 'cut' | 'paste' | 'fold' | 'unfold'
+export type KeyAction =
+  | Command
+  | 'undo'
+  | 'redo'
+  | 'copy'
+  | 'cut'
+  | 'paste'
+  | 'fold'
+  | 'unfold'
+  | 'goToLine'
+  | 'findNext'
+  | 'findPrevious'
+  | 'complete'
+  | 'jumpToBracket'
 
 export interface KeyBinding {
   readonly key: string
@@ -137,8 +150,30 @@ export const defaultKeymap: readonly KeyBinding[] = [
   { key: 'Enter', run: c.insertNewline },
   { key: 'Shift-Enter', run: c.insertNewline },
   { key: 'Tab', run: c.insertTab },
-  { key: 'Backspace', run: c.deleteCharBackward },
-  { key: 'Shift-Backspace', run: c.deleteCharBackward },
+  { key: 'Shift-Tab', run: c.indentLess },
+  { key: 'Mod-]', run: c.indentMore },
+  { key: 'Mod-[', run: c.indentLess },
+  { key: 'Backspace', run: c.deleteBackward },
+  { key: 'Shift-Backspace', run: c.deleteBackward },
+  { key: 'Mod-/', run: c.toggleLineComment },
+  { key: 'Shift-Alt-a', run: c.toggleBlockComment },
+  { key: 'Alt-ArrowUp', run: c.moveLineUp },
+  { key: 'Alt-ArrowDown', run: c.moveLineDown },
+  { key: 'Shift-Alt-ArrowUp', run: c.copyLineUp },
+  { key: 'Shift-Alt-ArrowDown', run: c.copyLineDown },
+  { key: 'Mod-Shift-k', run: c.deleteLine },
+  { key: 'Mod-Enter', run: c.insertLineAfter },
+  { key: 'Mod-Shift-Enter', run: c.insertLineBefore },
+  { key: 'Mod-l', run: c.selectLine, readOnly: true },
+  { key: 'Ctrl-Alt-ArrowUp', mac: 'Meta-Alt-ArrowUp', run: c.addCursorAbove, readOnly: true },
+  { key: 'Ctrl-Alt-ArrowDown', mac: 'Meta-Alt-ArrowDown', run: c.addCursorBelow, readOnly: true },
+  { key: 'Mod-d', run: c.selectNextOccurrence, readOnly: true },
+  { key: 'Mod-Shift-l', run: c.selectAllOccurrences, readOnly: true },
+  { key: 'Ctrl-g', run: 'goToLine', readOnly: true },
+  { key: 'F3', mac: 'Meta-g', run: 'findNext', readOnly: true },
+  { key: 'Shift-F3', mac: 'Meta-Shift-g', run: 'findPrevious', readOnly: true },
+  { key: 'Ctrl-Space', run: 'complete' },
+  { key: 'Mod-Shift-\\', run: 'jumpToBracket', readOnly: true },
   { key: 'Delete', run: c.deleteCharForward },
   { key: 'Ctrl-Backspace', mac: 'Alt-Backspace', run: c.deleteWordBackward },
   { key: 'Ctrl-Delete', mac: 'Alt-Delete', run: c.deleteWordForward },

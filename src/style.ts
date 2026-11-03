@@ -17,7 +17,13 @@ const LIGHT = `
   --dsk-code-editor-folded-bg: rgba(175, 184, 193, 0.3);
   --dsk-code-editor-error: #cf222e;
   --dsk-code-editor-warning: #9a6700;
-  --dsk-code-editor-info: #0969da;`
+  --dsk-code-editor-info: #0969da;
+  --dsk-code-editor-match: rgba(255, 196, 0, 0.35);
+  --dsk-code-editor-match-current: rgba(255, 150, 0, 0.6);
+  --dsk-code-editor-bracket: rgba(9, 105, 218, 0.18);
+  --dsk-code-editor-popup-bg: #ffffff;
+  --dsk-code-editor-popup-border: #d0d7de;
+  --dsk-code-editor-popup-active: rgba(9, 105, 218, 0.14);`
 const DARK = `
   --dsk-code-editor-bg: #0d1117;
   --dsk-code-editor-fg: #e6edf3;
@@ -30,7 +36,13 @@ const DARK = `
   --dsk-code-editor-folded-bg: rgba(110, 118, 129, 0.4);
   --dsk-code-editor-error: #ff7b72;
   --dsk-code-editor-warning: #e3b341;
-  --dsk-code-editor-info: #58a6ff;`
+  --dsk-code-editor-info: #58a6ff;
+  --dsk-code-editor-match: rgba(187, 128, 9, 0.4);
+  --dsk-code-editor-match-current: rgba(227, 179, 65, 0.6);
+  --dsk-code-editor-bracket: rgba(56, 139, 253, 0.25);
+  --dsk-code-editor-popup-bg: #161b22;
+  --dsk-code-editor-popup-border: #30363d;
+  --dsk-code-editor-popup-active: rgba(56, 139, 253, 0.25);`
 
 /** A squiggle under a diagnostic: a wave the background colour shows through. */
 const WAVE = `url("data:image/svg+xml,${encodeURIComponent(
@@ -101,6 +113,45 @@ dsk-code-editor { display: block; }
   position: absolute;
   -webkit-mask: ${WAVE} repeat-x left center / 6px 4px;
   mask: ${WAVE} repeat-x left center / 6px 4px;
+}
+.dsk-code-editor__match { position: absolute; background: var(--dsk-code-editor-match); border-radius: 2px; }
+.dsk-code-editor__match--current { background: var(--dsk-code-editor-match-current); }
+.dsk-code-editor__bracket {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--dsk-code-editor-bracket);
+  outline: 1px solid var(--dsk-code-editor-bracket);
+}
+.dsk-code-editor__completion {
+  position: absolute;
+  z-index: 6;
+  min-width: 160px;
+  max-width: 420px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px 0;
+  background: var(--dsk-code-editor-popup-bg);
+  border: 1px solid var(--dsk-code-editor-popup-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+}
+.dsk-code-editor__completion-item { display: flex; gap: 12px; padding: 0 8px; cursor: pointer; white-space: pre; }
+.dsk-code-editor__completion-item--active { background: var(--dsk-code-editor-popup-active); }
+.dsk-code-editor__completion-detail { margin-left: auto; color: var(--dsk-code-editor-gutter-fg); overflow: hidden; text-overflow: ellipsis; }
+.dsk-code-editor__panel { position: sticky; top: 0; left: 0; z-index: 7; height: 0; }
+.dsk-code-editor__panel-input {
+  position: absolute;
+  top: 6px;
+  right: 16px;
+  width: 220px;
+  padding: 4px 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--dsk-code-editor-popup-bg);
+  border: 1px solid var(--dsk-code-editor-popup-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+  outline: none;
 }
 .dsk-code-editor__diagnostic--error { background: var(--dsk-code-editor-error); }
 .dsk-code-editor__diagnostic--warning { background: var(--dsk-code-editor-warning); }

@@ -1,8 +1,9 @@
 # Getting started
 
-> 0.0.x edits, highlights, folds and checks: typing (IME included), moving
-> and selecting by keys and pointer, undo and redo, the clipboard,
-> highlighting as you type. The usual editing commands come in 0.1.0.
+> 0.1.0: typing (IME included), moving and selecting, undo and redo, the
+> clipboard, highlighting as you type, folding, checks of data formats, and
+> the editing commands of a code editor — indentation, brackets, comments,
+> lines, several cursors, go to line, search, completion.
 
 ## Install
 
@@ -24,6 +25,8 @@ const editor = new CodeEditor(document.getElementById('editor')!, {
   indentUnit: '    ', // what Tab inserts
   onChange: (e) => console.log(e.value.length),
   validate: true, // data formats checked as they are edited
+  closeBrackets: true, // brackets and quotes close as they are typed
+  completion: undefined, // the page's suggestions (see Completion)
 })
 
 editor.value // the text, with the line breaks it was given with
@@ -65,17 +68,91 @@ editing commands are in `commands` (`insertText`, `deleteCharBackward`,
 
 ## Keys
 
-The usual moves and edits: arrows, by word (Alt on macOS, Ctrl elsewhere),
-Home (to the indent, then to the line start), End, Page Up/Down, to the
-start and end of the text; Shift extends; Backspace and Delete by character,
-word or to the line start; Enter keeps the indent; Tab inserts `indentUnit`;
-Cmd/Ctrl+Z undo, Cmd/Ctrl+Shift+Z (Ctrl+Y) redo; Cmd/Ctrl+A select all;
-fold and unfold (below).
-Shortcuts work in any keyboard layout (Cmd+Z is undo in a Cyrillic one
-too). Bindings of your own go first:
+As in VS Code. Mod is Cmd on macOS, Ctrl elsewhere.
+
+| Keys | What |
+|---|---|
+| arrows, Home, End, Page Up/Down, Mod+Home/End | move (Alt on macOS, Ctrl elsewhere: by word; Home: to the indent, then the line start); Shift extends |
+| Enter | a new line with the indent, a step deeper after `{` `(` `[` (and `:` in Python, YAML); between `{}`, the closing one goes a line further |
+| Tab / Shift+Tab, Mod+] / Mod+[ | indent and outdent (Tab over lines indents them) |
+| Backspace | in the indentation, back a whole step; between `()` or `""`, both |
+| Mod+/ · Shift+Alt+A | line comment · block comment, on and off |
+| Alt+↑/↓ · Shift+Alt+↑/↓ · Mod+Shift+K | move lines · copy lines · delete lines |
+| Mod+Enter · Mod+Shift+Enter | a new line below · above |
+| Mod+L | select the line (again: the next one too) |
+| Mod+D · Mod+Shift+L | select the word, then its next occurrence · all of them |
+| Cmd+Alt+↑/↓ (macOS), Ctrl+Alt+↑/↓ | a cursor more above · below; Alt+click adds one; Escape leaves one |
+| Ctrl+G | go to line (on every system) |
+| Cmd+G / Cmd+Shift+G (macOS), F3 / Shift+F3 | next · previous match |
+| Ctrl+Space | completion |
+| Mod+Shift+\\ | to the matching bracket |
+| Cmd+Alt+[ / ] (macOS), Ctrl+Shift+[ / ] | fold · unfold |
+| Mod+Z · Mod+Shift+Z (Ctrl+Y) · Mod+A | undo · redo · select all |
+
+Brackets and quotes close as they are typed (an apostrophe after a letter
+stays one), a closing one types over the same character after the cursor,
+and a selection gets wrapped; `closeBrackets: false` turns it off. Copy and
+cut with no selection take the whole line; pasted, it goes above the
+cursor's line. Shortcuts work in any keyboard layout. Bindings of your own
+go first:
 
 ```ts
 new CodeEditor(el, { keymap: [{ key: 'Mod-s', run: () => (save(), null) }] })
+```
+
+## Go to line, search
+
+```ts
+editor.goToLine(120, 4) // line and column, from 1; the line comes to the middle of the view
+editor.openGoToLine() // the field Ctrl+G opens: `120` or `120:4`, Enter
+
+editor.setSearch({ search: 'todo', caseSensitive: false, wholeWord: true, regexp: false })
+editor.findNext() // selects the next match (round past the end); findPrevious()
+editor.searchMatches() // [{ from, to }] — counting reads the whole text
+editor.setSearch({ search: '(\\w+)=(\\d+)', regexp: true, replace: '$2=$1' })
+editor.replaceNext() // the selected match, then the next one selected
+editor.replaceAll() // how many; one step to undo
+editor.setSearch(null)
+```
+
+The matches in view are marked, the selected one more strongly. The editor
+has no find bar of its own — the page puts its own over it and drives it with
+these; Cmd+G (F3) without a search looks for the selected text.
+
+## Completion
+
+Typing a word (two letters and on) opens a list of what may finish it: the
+page's suggestions first, then the words of the text near the cursor.
+Arrows move, Enter or Tab picks, Escape closes; Ctrl+Space opens it at any
+point.
+
+```ts
+new CodeEditor(el, {
+  completion: async ({ prefix, pos, explicit, state }) => [
+    { label: 'console', detail: 'global', kind: 'variable' },
+    { label: 'constructor', insert: 'constructor()' },
+  ],
+  completeWords: true, // the words of the text too (the default)
+})
+editor.startCompletion()
+```
+
+## Indentation and `.editorconfig`
+
+Without `indentUnit`, the editor guesses it from the text (tabs, or the
+commonest step of spaces). The page that has the files gives
+`.editorconfig`'s settings:
+
+```ts
+import { editorConfigFor, indentOptions } from '@dskripchenko/code-editor'
+
+// The .editorconfig files on the way up to the file, by their directory.
+const settings = editorConfigFor('/repo/src/main.ts', {
+  '/repo': rootEditorConfigText,
+  '/repo/src': srcEditorConfigText,
+})
+editor.configure(indentOptions(settings)) // { indentUnit: '  ', tabSize: 2 }
+settings.endOfLine // 'lf' | 'crlf'; insertFinalNewline, trimTrailingWhitespace — for saving
 ```
 
 ## Pointer

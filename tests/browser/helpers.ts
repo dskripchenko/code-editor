@@ -21,7 +21,13 @@ export async function load(page: Page): Promise<void> {
 /** A fresh editor in #host; the input kind it got. */
 export async function make(
   page: Page,
-  options: { value?: string; input?: 'auto' | 'textarea'; readOnly?: boolean; language?: string },
+  options: {
+    value?: string
+    input?: 'auto' | 'textarea'
+    readOnly?: boolean
+    language?: string
+    indentUnit?: string
+  },
 ): Promise<string> {
   return page.evaluate((o) => (window as unknown as Win).make(o), options)
 }

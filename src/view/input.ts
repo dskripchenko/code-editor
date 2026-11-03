@@ -22,6 +22,8 @@ export interface InputHost {
   /** The element text is typed into (EditContext) or the textarea goes in. */
   readonly content: HTMLElement
   dispatch(spec: TransactionSpec, fromInput?: boolean): void
+  /** Text typed (not composed): the editor types it its way (pairs, completion). */
+  type(text: string): void
   handleKey(event: KeyboardEvent): boolean
   copy(event: ClipboardEvent): void
   cut(event: ClipboardEvent): void
@@ -151,8 +153,7 @@ class EditContextInput implements Input {
       from === this.from + this.local(main.from) &&
       to === this.from + this.local(main.to)
     ) {
-      const spec = insertText(e.text)(host.state, { pageLines: 0 })
-      if (spec) host.dispatch(spec)
+      host.type(e.text)
       return
     }
     // A composition, or a change the system made (autocorrect, an accent over the last letter): taken as it is.
@@ -270,8 +271,7 @@ class TextareaInput implements Input {
     if (this.prepared && text.startsWith(this.prepared) && text.length > this.prepared.length)
       text = text.slice(this.prepared.length)
     if (text && !this.host.readOnly) {
-      const spec = insertText(text)(this.host.state, { pageLines: 0 })
-      if (spec) this.host.dispatch(spec)
+      this.host.type(text)
     }
     this.sync()
   }

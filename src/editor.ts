@@ -5,7 +5,34 @@
  * line (minified code) is drawn only around the columns in view.
  */
 import { canValidate, foldRanges, validate, type Token } from '@dskripchenko/syntax'
-import { selectedText, deleteSelection, insertText, wordAroundRange } from './commands'
+import {
+  deleteLine,
+  deleteSelection,
+  insertText,
+  linesText,
+  selectedText,
+  typeText,
+  wordAroundRange,
+  type CommandContext,
+} from './commands'
+import { detectIndent } from './editorconfig'
+import { languageEditing } from './language'
+import {
+  findFrom,
+  matchesIn,
+  replacementFor,
+  searchPattern,
+  type Match,
+  type SearchQuery,
+} from './search'
+import {
+  CompletionList,
+  wordBefore,
+  wordsOf,
+  type CompletionItem,
+  type CompletionSource,
+} from './view/completion'
+import { GoToLine } from './view/panel'
 import { compileKeymap, defaultKeymap, keyName, type KeyBinding } from './keymap'
 import { Doc } from './state/doc'
 import { History } from './state/history'
@@ -47,6 +74,12 @@ export interface CodeEditorOptions {
   keymap?: readonly KeyBinding[]
   /** Data formats (JSON, YAML, XML, TOML, CSV, INI, .env) checked as they are edited (on by default). */
   validate?: boolean
+  /** Brackets and quotes closed as they are typed (on by default). */
+  closeBrackets?: boolean
+  /** The page's suggestions for completion, besides the text's own words. */
+  completion?: CompletionSource
+  /** The words of the text offered as completions (on by default). */
+  completeWords?: boolean
 }
 
 /** Lines drawn above and below the view, so a scroll does not show them blank. */
@@ -84,7 +117,7 @@ export class CodeEditor {
   private readonly cursorsEl: HTMLElement
   private editorState: EditorState
   private readonly history = new History()
-  private readonly config: EditorConfig
+  private config: EditorConfig
   private readonly keys: Map<string, KeyBinding>
   private readonly input: Input
   private lineBreak: LineBreak
@@ -112,6 +145,18 @@ export class CodeEditor {
   /** Changes when folds or diagnostics do: the lines are drawn again. */
   private marks = 0
   private analyzeTimer = 0
+  private languageId: string | null = null
+  private configured: { tabSize: boolean; indentUnit: boolean }
+  private readonly closeBrackets: boolean
+  private readonly completionSource?: CompletionSource
+  private readonly completeWords: boolean
+  private readonly completion: CompletionList
+  private completionRequest = 0
+  private readonly goToLinePanel: GoToLine
+  private query: SearchQuery | null = null
+  private pattern: RegExp | null = null
+  /** The text of the last copy of whole lines (no selection): pasted, it goes above the line. */
+  private lineClip: string | null = null
   private longest = { version: -1, length: 0 }
   private composition: readonly { from: number; to: number }[] = []
   private frame = 0
@@ -149,6 +194,12 @@ export class CodeEditor {
     this.dom.append(this.sizer)
     parent.append(this.dom)
     ensureStyle(this.dom)
+    this.completion = new CompletionList(this.content, (item) => this.acceptCompletion(item))
+    this.goToLinePanel = new GoToLine(
+      this.dom,
+      (line, column) => this.goToLine(line, column),
+      () => this.focus(),
+    )
 
     this.showNumbers = options.lineNumbers !== false
     this.gutter.hidden = !this.showNumbers
@@ -156,7 +207,17 @@ export class CodeEditor {
     this.content.setAttribute('aria-readonly', String(this.readOnlyFlag))
     this.onChange = options.onChange
     this.validating = options.validate !== false
-    this.config = { tabSize: options.tabSize ?? 4, indentUnit: options.indentUnit ?? '    ' }
+    this.configured = {
+      tabSize: options.tabSize !== undefined,
+      indentUnit: options.indentUnit !== undefined,
+    }
+    this.closeBrackets = options.closeBrackets !== false
+    this.completionSource = options.completion
+    this.completeWords = options.completeWords !== false
+    this.config = {
+      tabSize: options.tabSize ?? 4,
+      indentUnit: options.indentUnit ?? detectIndent(options.value ?? '') ?? '    ',
+    }
     this.linesEl.style.tabSize = String(this.config.tabSize)
     this.keys = compileKeymap([...(options.keymap ?? []), ...defaultKeymap])
     const value = options.value ?? ''
@@ -200,6 +261,9 @@ export class CodeEditor {
   /** Replaces the text: the cursor to the start, the undo history cleared. */
   set value(value: string) {
     this.lineBreak = detectLineBreak(value)
+    if (!this.configured.indentUnit)
+      this.config = { ...this.config, indentUnit: detectIndent(value) ?? this.config.indentUnit }
+    this.completion.close()
     this.editorState = new EditorState(new Doc(value), Selection.single(0), this.config)
     this.history.clear()
     this.highlighting.reset()
@@ -227,7 +291,7 @@ export class CodeEditor {
     this.lang = language
     if (language) this.dom.dataset.language = language
     else delete this.dom.dataset.language
-    this.highlighting.setLanguage(language)
+    this.languageId = this.highlighting.setLanguage(language)
     this.drawn.version = -1
     this.analyze()
     this.schedule()
@@ -275,6 +339,113 @@ export class CodeEditor {
 
   get hasFocus(): boolean {
     return this.input.hasFocus()
+  }
+
+  /** What Tab inserts and a tab's width (from `.editorconfig`, say: see `editorConfigFor`). */
+  configure(config: { tabSize?: number; indentUnit?: string }): void {
+    if (config.tabSize !== undefined) this.configured.tabSize = true
+    if (config.indentUnit !== undefined) this.configured.indentUnit = true
+    this.config = { ...this.config, ...config }
+    const { doc, selection } = this.editorState
+    this.editorState = new EditorState(doc, selection, this.config)
+    this.linesEl.style.tabSize = String(this.config.tabSize)
+    this.drawn.version = -1
+    this.draw()
+  }
+
+  /** What Tab inserts and a tab's width, as in use (guessed from the text when not given). */
+  get indentation(): { tabSize: number; indentUnit: string } {
+    return { ...this.config }
+  }
+
+  /** The cursor to a line and column (both from 1, as people count them); the view follows. */
+  goToLine(line: number, column = 1): void {
+    const doc = this.editorState.doc
+    const index = Math.max(0, Math.min(doc.lineCount - 1, Math.floor(line) - 1))
+    const text = doc.lineText(index)
+    const pos = doc.lineStart(index) + Math.max(0, Math.min(text.length, Math.floor(column) - 1))
+    this.dispatch({ selection: Selection.single(pos), userEvent: 'select', scrollIntoView: true })
+    this.centerCursor()
+    this.focus()
+  }
+
+  /** The field to type a line into (Ctrl+G). */
+  openGoToLine(): void {
+    const doc = this.editorState.doc
+    const line = doc.lineAt(this.editorState.selection.main.head)
+    this.goToLinePanel.show(
+      `${line.index + 1}:${this.editorState.selection.main.head - line.from + 1} — 1–${doc.lineCount}`,
+    )
+  }
+
+  /** Sets what is searched for (null for nothing): the matches are marked in the text. */
+  setSearch(query: SearchQuery | null): void {
+    this.query = query && query.search ? query : null
+    this.pattern = this.query ? searchPattern(this.query) : null
+    this.drawLayers()
+  }
+
+  get search(): SearchQuery | null {
+    return this.query
+  }
+
+  /** The matches of the search, up to `limit` (counting them reads the whole text). */
+  searchMatches(limit = 10_000): Match[] {
+    if (!this.pattern) return []
+    const doc = this.editorState.doc
+    return matchesIn(doc, this.pattern, 0, doc.lineCount, limit)
+  }
+
+  /** The next match after the cursor selected (round past the end); without a search, the selection's text is searched for. */
+  findNext(): boolean {
+    return this.find(false)
+  }
+
+  findPrevious(): boolean {
+    return this.find(true)
+  }
+
+  /** The selected match replaced, and the next one selected; false when there is no match. */
+  replaceNext(): boolean {
+    if (!this.pattern || !this.query || this.readOnlyFlag) return false
+    const main = this.editorState.selection.main
+    const doc = this.editorState.doc
+    const here = matchesIn(
+      doc,
+      this.pattern,
+      doc.lineAt(main.from).index,
+      doc.lineAt(main.from).index + 1,
+    )
+    const match = here.find((m) => m.from === main.from && m.to === main.to)
+    if (match) {
+      const insert = replacementFor(doc, this.pattern, this.query, match)
+      this.dispatch({
+        changes: { from: match.from, to: match.to, insert },
+        selection: Selection.single(match.from + insert.length),
+        userEvent: 'input.replace',
+      })
+    }
+    return this.find(false) || !!match
+  }
+
+  /** Every match replaced, as one step to undo; how many. */
+  replaceAll(): number {
+    if (!this.pattern || !this.query || this.readOnlyFlag) return 0
+    const doc = this.editorState.doc
+    const matches = matchesIn(doc, this.pattern, 0, doc.lineCount)
+    if (matches.length === 0) return 0
+    const changes = matches.map((m) => ({
+      from: m.from,
+      to: m.to,
+      insert: replacementFor(doc, this.pattern!, this.query!, m),
+    }))
+    this.dispatch({ changes, userEvent: 'input.replace' })
+    return matches.length
+  }
+
+  /** Completion opened at the cursor, as Ctrl+Space does. */
+  startCompletion(): void {
+    void this.complete(true)
   }
 
   /** What is wrong with the text: the editor's own check, and what `setDiagnostics` gave. */
@@ -325,6 +496,7 @@ export class CodeEditor {
     cancelAnimationFrame(this.frame)
     this.highlighting.destroy()
     clearTimeout(this.analyzeTimer)
+    this.completionRequest++
     this.stopDrag()
     this.resize?.disconnect()
     for (const off of this.cleanup) off()
@@ -359,6 +531,12 @@ export class CodeEditor {
       this.marks++
       this.analyze()
     }
+    // Completion follows typing; anything else closes it.
+    if (
+      this.completion.open &&
+      !trs.every((t) => t.userEvent === 'input.type' || t.userEvent === 'delete.backward')
+    )
+      this.completion.close()
     // A cursor moved into folded lines opens their fold.
     const { doc, selection } = this.editorState
     if (this.folding.reveal(selection.ranges.map((r) => doc.lineAt(r.head).index))) this.marks++
@@ -393,12 +571,14 @@ export class CodeEditor {
       },
       content: this.content,
       dispatch: (spec, fromInput) => void this.apply(spec, fromInput ?? false),
+      type: (text) => this.type(text),
       handleKey: (e) => this.handleKey(e),
       copy: (e) => this.copy(e),
       cut: (e) => this.cut(e),
       paste: (e) => this.paste(e),
       focusChanged: (focused) => {
         this.dom.classList.toggle('dsk-code-editor--focused', focused)
+        if (!focused) this.completion.close()
         this.drawLayers()
       },
       breakHistory: () => this.history.breakGroup(),
@@ -413,6 +593,10 @@ export class CodeEditor {
   // Keys and the clipboard ----------------------------------------------------
 
   private handleKey(event: KeyboardEvent): boolean {
+    if (this.completion.open && this.completionKey(event)) {
+      event.preventDefault()
+      return true
+    }
     const binding = this.keys.get(keyName(event))
     if (!binding) return false
     const run = binding.run
@@ -425,17 +609,20 @@ export class CodeEditor {
     } else if (run === 'fold' || run === 'unfold') {
       if (run === 'fold') this.fold()
       else this.unfold()
+    } else if (run === 'goToLine') {
+      this.openGoToLine()
+    } else if (run === 'findNext' || run === 'findPrevious') {
+      this.find(run === 'findPrevious')
+    } else if (run === 'complete') {
+      void this.complete(true)
+    } else if (run === 'jumpToBracket') {
+      const pair = this.bracketPair()
+      if (!pair) return false
+      const head = this.editorState.selection.main.head
+      const target = pair[0] === head || pair[0] + 1 === head ? pair[1] : pair[0]
+      this.dispatch({ selection: Selection.single(target), userEvent: 'select' })
     } else {
-      const folding = this.folding
-      const count = this.editorState.doc.lineCount
-      const spec = run(this.editorState, {
-        pageLines: this.pageLines(),
-        rows: {
-          count: folding.rowCount(count),
-          rowOf: (line) => folding.rowOf(line),
-          lineOf: (row) => folding.lineOf(row),
-        },
-      })
+      const spec = run(this.editorState, this.commandContext())
       if (!spec) {
         // Escape with one cursor is the page's (a dialog may close on it).
         if (event.key === 'Escape') return false
@@ -446,25 +633,247 @@ export class CodeEditor {
   }
 
   private copy(event: ClipboardEvent): void {
-    const text = selectedText(this.editorState)
-    if (!text || !event.clipboardData) return
+    if (!event.clipboardData) return
+    const whole = this.editorState.selection.ranges.every((r) => r.empty)
+    // No selection: the cursors' whole lines.
+    const text = whole ? linesText(this.editorState) : selectedText(this.editorState)
+    if (!text) return
+    this.lineClip = whole ? text : null
     event.clipboardData.setData('text/plain', text)
     event.preventDefault()
   }
 
   private cut(event: ClipboardEvent): void {
+    const whole = this.editorState.selection.ranges.every((r) => r.empty)
     this.copy(event)
     if (!event.defaultPrevented || this.readOnlyFlag) return
-    const spec = deleteSelection(this.editorState, { pageLines: 0 })
-    if (spec) this.dispatch(spec)
+    const spec = (whole ? deleteLine : deleteSelection)(this.editorState, { pageLines: 0 })
+    if (spec) this.dispatch({ ...spec, userEvent: 'delete.cut' })
   }
 
   private paste(event: ClipboardEvent): void {
     const text = event.clipboardData?.getData('text/plain')
     event.preventDefault()
     if (!text || this.readOnlyFlag) return
-    const spec = insertText(text, 'input.paste')(this.editorState, { pageLines: 0 })
+    const state = this.editorState
+    const ranges = state.selection.ranges
+    // Lines copied whole go above the cursor's line, the cursor staying where it is.
+    if (
+      this.lineClip !== null &&
+      text.replace(/\r\n?/g, '\n') === this.lineClip &&
+      ranges.every((r) => r.empty)
+    ) {
+      const doc = state.doc
+      const starts = [...new Set(ranges.map((r) => doc.lineAt(r.head).from))]
+      this.dispatch({
+        changes: starts.map((from) => ({ from, to: from, insert: this.lineClip! })),
+        userEvent: 'input.paste',
+      })
+      return
+    }
+    const spec = insertText(text, 'input.paste')(state, { pageLines: 0 })
     if (spec) this.dispatch(spec)
+  }
+
+  private commandContext(): CommandContext {
+    const folding = this.folding
+    const count = this.editorState.doc.lineCount
+    return {
+      pageLines: this.pageLines(),
+      rows: {
+        count: folding.rowCount(count),
+        rowOf: (line) => folding.rowOf(line),
+        lineOf: (row) => folding.lineOf(row),
+      },
+      language: languageEditing(this.languageId),
+    }
+  }
+
+  /** Text typed (not composed): brackets and quotes pair up, completion follows the word. */
+  private type(text: string): void {
+    if (this.readOnlyFlag) return
+    const command = this.closeBrackets ? typeText(text) : insertText(text)
+    const spec = command(this.editorState, this.commandContext())
+    if (spec) this.apply(spec, false)
+    if (/^[\p{L}\p{N}_$]$/u.test(text) || (this.completion.open && text === '.'))
+      void this.complete(false)
+    else if (this.completion.open) this.completion.close()
+  }
+
+  // Completion -----------------------------------------------------------------
+
+  private async complete(explicit: boolean): Promise<void> {
+    const state = this.editorState
+    const main = state.selection.main
+    if (!main.empty) return
+    const word = wordBefore(state, main.head)
+    if (!explicit && word.text.length < 2) {
+      this.completion.close()
+      return
+    }
+    const context = { state, pos: main.head, prefix: word.text, from: word.from, explicit }
+    const request = ++this.completionRequest
+    let items: CompletionItem[] = []
+    if (this.completionSource) {
+      try {
+        const got = await this.completionSource(context)
+        if (got) items = [...got]
+      } catch {
+        // A failing source gives nothing; the words still do.
+      }
+    }
+    if (request !== this.completionRequest || this.editorState.selection.main.head !== main.head)
+      return
+    if (this.completeWords) {
+      const known = new Set(items.map((i) => i.label))
+      for (const w of wordsOf(context)) if (!known.has(w.label)) items.push(w)
+    }
+    const lower = word.text.toLowerCase()
+    items = items.filter((i) => i.label.toLowerCase().startsWith(lower) && i.label !== word.text)
+    if (items.length === 0) return this.completion.close()
+    const line = state.doc.lineAt(word.from)
+    this.completion.show(items.slice(0, 100), context, {
+      left: PAD + this.xAt(line.index, word.from - line.from),
+      top: this.lineTop(line.index) + this.lineHeight,
+    })
+  }
+
+  /** The keys the open list takes: moves, picking, closing. */
+  private completionKey(event: KeyboardEvent): boolean {
+    if (event.altKey || event.ctrlKey || event.metaKey) return false
+    switch (event.key) {
+      case 'ArrowDown':
+        this.completion.move(1)
+        return true
+      case 'ArrowUp':
+        this.completion.move(-1)
+        return true
+      case 'PageDown':
+        this.completion.move(8)
+        return true
+      case 'PageUp':
+        this.completion.move(-8)
+        return true
+      case 'Enter':
+      case 'Tab': {
+        const item = this.completion.selected
+        if (!item) return false
+        this.acceptCompletion(item)
+        return true
+      }
+      case 'Escape':
+        this.completion.close()
+        return true
+    }
+    return false
+  }
+
+  private acceptCompletion(item: CompletionItem): void {
+    const context = this.completion.context
+    this.completion.close()
+    if (!context || this.readOnlyFlag) return
+    const state = this.editorState
+    const insert = item.insert ?? item.label
+    // At every cursor whose word before it is the same prefix.
+    const changes = state.selection.ranges
+      .filter((r) => r.empty && wordBefore(state, r.head).text === context.prefix)
+      .map((r) => ({ from: r.head - context.prefix.length, to: r.head, insert }))
+    if (changes.length === 0) return
+    this.dispatch({ changes, userEvent: 'input.complete' })
+  }
+
+  // Search ---------------------------------------------------------------------
+
+  private find(backwards: boolean): boolean {
+    const state = this.editorState
+    const main = state.selection.main
+    if (!this.pattern) {
+      const text = main.empty
+        ? state.doc.slice(...wordAroundRange(state, main.head))
+        : state.doc.slice(main.from, main.to)
+      if (!text.trim() || text.includes('\n')) return false
+      this.setSearch({ search: text, caseSensitive: true })
+    }
+    const pattern = this.pattern
+    if (!pattern) return false
+    const match = findFrom(state.doc, pattern, backwards ? main.from : main.to, backwards)
+    if (!match) return false
+    this.dispatch({
+      selection: Selection.single(match.from, match.to),
+      userEvent: 'select.search',
+      scrollIntoView: true,
+    })
+    return true
+  }
+
+  // Brackets -------------------------------------------------------------------
+
+  /** The bracket at (or just before) the main cursor and its pair, as offsets; null when there is none. */
+  private bracketPair(): [number, number] | null {
+    const state = this.editorState
+    const main = state.selection.main
+    if (!main.empty) return null
+    const doc = state.doc
+    const head = main.head
+    const OPEN = '([{'
+    const CLOSE = ')]}'
+    for (const pos of [head, head - 1]) {
+      if (pos < 0 || pos >= doc.length) continue
+      const ch = doc.slice(pos, pos + 1)
+      const o = OPEN.indexOf(ch)
+      const c = CLOSE.indexOf(ch)
+      if (o < 0 && c < 0) continue
+      if (!this.structural(pos)) continue
+      const forward = o >= 0
+      const mine = forward ? OPEN[o]! : CLOSE[c]!
+      const other = forward ? CLOSE[o]! : OPEN[c]!
+      const line = doc.lineAt(pos).index
+      const limit = 2000
+      let depth = 0
+      for (
+        let i = line;
+        forward ? i < Math.min(doc.lineCount, line + limit) : i >= Math.max(0, line - limit);
+        i += forward ? 1 : -1
+      ) {
+        const text = doc.lineText(i)
+        const start = doc.lineStart(i)
+        let k = i === line ? pos - start : forward ? 0 : text.length - 1
+        for (; forward ? k < text.length : k >= 0; k += forward ? 1 : -1) {
+          const x = text[k]
+          if (x !== mine && x !== other) continue
+          if (!this.structural(start + k)) continue
+          if (x === mine) depth++
+          else if (--depth === 0) return forward ? [pos, start + k] : [start + k, pos]
+        }
+      }
+      return null
+    }
+    return null
+  }
+
+  /** Whether a bracket is code (not in a string or a comment), by the highlighting's tokens. */
+  private structural(pos: number): boolean {
+    if (!this.highlighting.active) return true
+    const doc = this.editorState.doc
+    const line = doc.lineAt(pos)
+    const row = this.highlighting.tokens(line.index, line.index + 1)?.[0]
+    if (!row) return true
+    let at = 0
+    for (const t of row) {
+      if (pos - line.from < at + t.text.length)
+        return t.type !== 'string' && t.type !== 'comment' && t.type !== 'regex'
+      at += t.text.length
+    }
+    return true
+  }
+
+  /** The cursor's line in the middle of the view (a jump far away). */
+  private centerCursor(): void {
+    const { doc, selection } = this.editorState
+    const row = this.folding.rowOf(doc.lineAt(selection.main.head).index)
+    const top = row * this.lineHeight - this.dom.clientHeight / 2
+    this.dom.scrollTop = Math.max(0, top / this.scale())
+    this.draw()
   }
 
   // Measuring ----------------------------------------------------------------
@@ -781,6 +1190,41 @@ export class CodeEditor {
     for (const i of active)
       if (i >= first && i < last)
         selections.prepend(rect('dsk-code-editor__active-line', 0, this.lineTop(i), 0))
+    // The search's matches in view, and the bracket pair at the cursor: behind the text.
+    if (this.pattern && last > first) {
+      const main = selection.main
+      for (const m of matchesIn(doc, this.pattern, first, last, 2000)) {
+        const line = doc.lineAt(m.from)
+        if (this.folding.isHidden(line.index)) continue
+        const x1 = this.xAt(line.index, m.from - line.from)
+        const x2 = this.xAt(line.index, m.to - line.from)
+        const current = m.from === main.from && m.to === main.to
+        selections.append(
+          rect(
+            `dsk-code-editor__match${current ? ' dsk-code-editor__match--current' : ''}`,
+            PAD + x1,
+            this.lineTop(line.index),
+            Math.max(2, x2 - x1),
+          ),
+        )
+      }
+    }
+    const pair = this.bracketPair()
+    if (pair)
+      for (const pos of pair) {
+        const line = doc.lineAt(pos)
+        if (line.index < first || line.index >= last || this.folding.isHidden(line.index)) continue
+        const x1 = this.xAt(line.index, pos - line.from)
+        const x2 = this.xAt(line.index, pos - line.from + 1)
+        selections.append(
+          rect(
+            'dsk-code-editor__bracket',
+            PAD + x1,
+            this.lineTop(line.index),
+            Math.max(2, x2 - x1),
+          ),
+        )
+      }
     for (const g of this.diagnosticsModel.list) {
       if (g.to < doc.lineStart(first) || (last < doc.lineCount && g.from > doc.lineStart(last)))
         continue
@@ -937,14 +1381,20 @@ export class CodeEditor {
       const lang = this.highlighting.active ? this.lang : null
       const big = doc.length > ANALYZE_LIMIT
       const text = lang && !big ? doc.toString() : ''
-      this.folding.setAvailable(
+      // Drawn again only when something changed (a redraw replaces the line elements).
+      let changed = this.folding.setAvailable(
         text ? foldRanges(text, lang!).map((r) => ({ start: r.start - 1, end: r.end - 1 })) : [],
       )
-      this.marks++
-      this.schedule()
       if (this.validating) {
         const found = text && canValidate(lang!) ? fromValidation(doc, validate(text, lang!)) : []
-        if (this.diagnosticsModel.set('syntax', found, doc.length)) this.toldDiagnostics()
+        if (this.diagnosticsModel.set('syntax', found, doc.length)) {
+          changed = true
+          this.toldDiagnostics()
+        }
+      }
+      if (changed) {
+        this.marks++
+        this.schedule()
       }
     }
     if (now) run()

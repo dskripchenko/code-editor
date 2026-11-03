@@ -1,7 +1,7 @@
 # 快速上手
 
-> 0.0.x 可编辑、高亮、折叠和校验：输入（含输入法）、键盘与鼠标移动和选择、撤销与重做、剪贴板、
-> 输入时高亮。常用编辑命令将在 0.1.0 提供。
+> 0.1.0：输入（含输入法）、移动和选择、撤销与重做、剪贴板、输入时高亮、折叠、数据格式校验，
+> 以及代码编辑器的编辑命令——缩进、括号、注释、行操作、多光标、跳转到行、搜索、自动补全。
 
 ## 安装
 
@@ -23,6 +23,8 @@ const editor = new CodeEditor(document.getElementById('editor')!, {
   indentUnit: '    ', // Tab 键插入的内容
   onChange: (e) => console.log(e.value.length),
   validate: true, // 编辑时校验数据格式
+  closeBrackets: true, // 输入时自动闭合括号和引号
+  completion: undefined, // 页面提供的建议（见“自动补全”）
 })
 
 editor.value // 文本，保留传入时的换行符
@@ -61,13 +63,84 @@ editor.dispatch({
 
 ## 按键
 
-常用的移动与编辑：方向键、按词移动（macOS 上为 Alt，其他系统为 Ctrl）、Home（先到缩进处，再到行首）、
-End、Page Up/Down、文本开头和结尾；Shift 扩展选择；Backspace 和 Delete 按字符、按词或删到行首；
-Enter 保留缩进；Tab 插入 `indentUnit`；Cmd/Ctrl+Z 撤销，Cmd/Ctrl+Shift+Z（Ctrl+Y）重做；
-Cmd/Ctrl+A 全选；折叠与展开见下文。快捷键在任何键盘布局下都可用（西里尔布局下 Cmd+Z 同样是撤销）。自定义绑定优先：
+与 VS Code 相同。Mod 在 macOS 上是 Cmd，其他系统上是 Ctrl。
+
+| 按键 | 作用 |
+|---|---|
+| 方向键、Home、End、Page Up/Down、Mod+Home/End | 移动（macOS 上 Alt、其他系统 Ctrl：按词；Home：先到缩进处再到行首）；Shift 扩展选择 |
+| Enter | 带缩进的新行，在 `{` `(` `[` 之后（以及 Python、YAML 中的 `:`）再深一级；在 `{}` 之间时，闭括号移到下一行 |
+| Tab / Shift+Tab、Mod+] / Mod+[ | 缩进与反缩进（对多行按 Tab 会缩进这些行） |
+| Backspace | 在缩进中回退整级；在 `()` 或 `""` 之间则两个一起删除 |
+| Mod+/ · Shift+Alt+A | 行注释 · 块注释，切换 |
+| Alt+↑/↓ · Shift+Alt+↑/↓ · Mod+Shift+K | 移动行 · 复制行 · 删除行 |
+| Mod+Enter · Mod+Shift+Enter | 在下方 · 上方插入新行 |
+| Mod+L | 选择当前行（再按：连同下一行） |
+| Mod+D · Mod+Shift+L | 选择单词，然后是它的下一个出现 · 全部出现 |
+| Cmd+Alt+↑/↓（macOS）、Ctrl+Alt+↑/↓ | 在上方 · 下方添加光标；Alt+点击添加；Escape 只保留一个 |
+| Ctrl+G | 跳转到行（所有系统） |
+| Cmd+G / Cmd+Shift+G（macOS）、F3 / Shift+F3 | 下一个 · 上一个匹配 |
+| Ctrl+Space | 自动补全 |
+| Mod+Shift+\\ | 跳到匹配的括号 |
+| Cmd+Alt+[ / ]（macOS）、Ctrl+Shift+[ / ] | 折叠 · 展开 |
+| Mod+Z · Mod+Shift+Z（Ctrl+Y）· Mod+A | 撤销 · 重做 · 全选 |
+
+括号和引号在输入时自动闭合（字母后的撇号保持为撇号），输入闭合字符时会越过光标后相同的字符，
+有选区时则把选区包起来；`closeBrackets: false` 可关闭此功能。没有选区时复制和剪切会取整行；
+粘贴时整行插入到光标所在行的上方。快捷键在任何键盘布局下都可用。自定义绑定优先：
 
 ```ts
 new CodeEditor(el, { keymap: [{ key: 'Mod-s', run: () => (save(), null) }] })
+```
+
+## 跳转到行、搜索
+
+```ts
+editor.goToLine(120, 4) // 行和列，从 1 开始；该行移到视图中间
+editor.openGoToLine() // Ctrl+G 打开的输入框：`120` 或 `120:4`，回车
+
+editor.setSearch({ search: 'todo', caseSensitive: false, wholeWord: true, regexp: false })
+editor.findNext() // 选中下一个匹配（到末尾后回绕）；findPrevious()
+editor.searchMatches() // [{ from, to }] —— 计数会读取整个文本
+editor.setSearch({ search: '(\\w+)=(\\d+)', regexp: true, replace: '$2=$1' })
+editor.replaceNext() // 替换选中的匹配，然后选中下一个
+editor.replaceAll() // 替换数量；一步即可撤销
+editor.setSearch(null)
+```
+
+可见的匹配会被标记，选中的那个更醒目。编辑器没有自己的搜索栏——页面把自己的搜索栏放在上面，
+并通过这些方法驱动它；没有搜索时 Cmd+G（F3）会查找选中的文本。
+
+## 自动补全
+
+输入一个单词（两个字母起）会打开一个可补全它的列表：先是页面提供的建议，然后是光标附近文本中的单词。
+方向键移动，Enter 或 Tab 选择，Escape 关闭；Ctrl+Space 可在任意位置打开。
+
+```ts
+new CodeEditor(el, {
+  completion: async ({ prefix, pos, explicit, state }) => [
+    { label: 'console', detail: 'global', kind: 'variable' },
+    { label: 'constructor', insert: 'constructor()' },
+  ],
+  completeWords: true, // 也包括文本中的单词（默认）
+})
+editor.startCompletion()
+```
+
+## 缩进与 `.editorconfig`
+
+未给出 `indentUnit` 时，编辑器会从文本中推测（制表符，或最常见的空格级数）。持有文件的页面传入
+`.editorconfig` 的设置：
+
+```ts
+import { editorConfigFor, indentOptions } from '@dskripchenko/code-editor'
+
+// 通往该文件路径上的 .editorconfig 文件，按其所在目录。
+const settings = editorConfigFor('/repo/src/main.ts', {
+  '/repo': rootEditorConfigText,
+  '/repo/src': srcEditorConfigText,
+})
+editor.configure(indentOptions(settings)) // { indentUnit: '  ', tabSize: 2 }
+settings.endOfLine // 'lf' | 'crlf'；insertFinalNewline、trimTrailingWhitespace —— 用于保存
 ```
 
 ## 鼠标

@@ -1,9 +1,10 @@
 # Erste Schritte
 
-> 0.0.x bearbeitet, hebt hervor, faltet und prüft: Tippen (auch IME),
-> Bewegen und Auswählen mit Tasten und Maus, Rückgängig und Wiederholen, die
-> Zwischenablage, Hervorhebung beim Tippen. Die üblichen Befehle kommen mit
-> 0.1.0.
+> 0.1.0: Tippen (auch IME), Bewegen und Auswählen, Rückgängig und
+> Wiederholen, die Zwischenablage, Hervorhebung beim Tippen, Falten, Prüfen
+> von Datenformaten und die Befehle eines Code-Editors — Einrückung,
+> Klammern, Kommentare, Zeilen, mehrere Cursor, Gehe zu Zeile, Suche,
+> Vervollständigung.
 
 ## Installation
 
@@ -25,6 +26,8 @@ const editor = new CodeEditor(document.getElementById('editor')!, {
   indentUnit: '    ', // was Tab einfügt
   onChange: (e) => console.log(e.value.length),
   validate: true, // Datenformate beim Bearbeiten prüfen
+  closeBrackets: true, // Klammern und Anführungszeichen schließen sich beim Tippen
+  completion: undefined, // die Vorschläge der Seite (siehe Vervollständigung)
 })
 
 editor.value // der Text, mit den Zeilenumbrüchen, mit denen er kam
@@ -67,17 +70,91 @@ Befehle stehen in `commands` (`insertText`, `deleteCharBackward`,
 
 ## Tasten
 
-Die üblichen Bewegungen und Änderungen: Pfeile, wortweise (Alt auf macOS,
-sonst Ctrl), Pos1 (zur Einrückung, dann zum Zeilenanfang), Ende, Bild
-auf/ab, Anfang und Ende des Textes; Shift erweitert; Rücktaste und Entf
-zeichen-, wortweise oder bis zum Zeilenanfang; Enter behält die Einrückung;
-Tab fügt `indentUnit` ein; Cmd/Ctrl+Z rückgängig, Cmd/Ctrl+Shift+Z (Ctrl+Y)
-wiederholen; Cmd/Ctrl+A alles auswählen; Falten (unten). Kürzel funktionieren in jedem
-Tastaturlayout (Cmd+Z ist auch im kyrillischen Rückgängig). Eigene Bindungen
-kommen zuerst:
+Wie in VS Code. Mod ist Cmd auf macOS, sonst Ctrl.
+
+| Tasten | Was |
+|---|---|
+| Pfeile, Pos1, Ende, Bild auf/ab, Mod+Pos1/Ende | bewegen (Alt auf macOS, sonst Ctrl: wortweise; Pos1: zur Einrückung, dann zum Zeilenanfang); Shift erweitert |
+| Enter | neue Zeile mit der Einrückung, eine Stufe tiefer nach `{` `(` `[` (und `:` in Python, YAML); zwischen `{}` rückt die schließende eine Zeile weiter |
+| Tab / Shift+Tab, Mod+] / Mod+[ | einrücken und ausrücken (Tab über Zeilen rückt sie ein) |
+| Rücktaste | in der Einrückung eine ganze Stufe zurück; zwischen `()` oder `""` beide |
+| Mod+/ · Shift+Alt+A | Zeilenkommentar · Blockkommentar, an und aus |
+| Alt+↑/↓ · Shift+Alt+↑/↓ · Mod+Shift+K | Zeilen verschieben · kopieren · löschen |
+| Mod+Enter · Mod+Shift+Enter | neue Zeile darunter · darüber |
+| Mod+L | die Zeile auswählen (nochmal: die nächste dazu) |
+| Mod+D · Mod+Shift+L | das Wort auswählen, dann sein nächstes Vorkommen · alle |
+| Cmd+Alt+↑/↓ (macOS), Ctrl+Alt+↑/↓ | ein Cursor mehr darüber · darunter; Alt+Klick fügt einen hinzu; Escape lässt einen |
+| Ctrl+G | gehe zu Zeile (auf jedem System) |
+| Cmd+G / Cmd+Shift+G (macOS), F3 / Shift+F3 | nächster · vorheriger Treffer |
+| Ctrl+Leertaste | Vervollständigung |
+| Mod+Shift+\\ | zur passenden Klammer |
+| Cmd+Alt+[ / ] (macOS), Ctrl+Shift+[ / ] | falten · entfalten |
+| Mod+Z · Mod+Shift+Z (Ctrl+Y) · Mod+A | rückgängig · wiederholen · alles auswählen |
+
+Klammern und Anführungszeichen schließen sich beim Tippen (ein Apostroph
+nach einem Buchstaben bleibt einer), eine schließende überschreibt dieselbe
+nach dem Cursor, und eine Auswahl wird eingeschlossen; `closeBrackets: false`
+schaltet das ab. Kopieren und Ausschneiden ohne Auswahl nehmen die ganze
+Zeile; eingefügt landet sie über der Zeile des Cursors. Kürzel
+funktionieren in jedem Tastaturlayout. Eigene Bindungen kommen zuerst:
 
 ```ts
 new CodeEditor(el, { keymap: [{ key: 'Mod-s', run: () => (save(), null) }] })
+```
+
+## Gehe zu Zeile, Suche
+
+```ts
+editor.goToLine(120, 4) // Zeile und Spalte ab 1; die Zeile kommt in die Mitte der Ansicht
+editor.openGoToLine() // das Feld, das Ctrl+G öffnet: `120` oder `120:4`, Enter
+
+editor.setSearch({ search: 'todo', caseSensitive: false, wholeWord: true, regexp: false })
+editor.findNext() // wählt den nächsten Treffer (im Kreis); findPrevious()
+editor.searchMatches() // [{ from, to }] — Zählen liest den ganzen Text
+editor.setSearch({ search: '(\\w+)=(\\d+)', regexp: true, replace: '$2=$1' })
+editor.replaceNext() // der ausgewählte Treffer, dann wird der nächste ausgewählt
+editor.replaceAll() // wie viele; ein Schritt zum Rückgängigmachen
+editor.setSearch(null)
+```
+
+Die sichtbaren Treffer sind markiert, der ausgewählte stärker. Eine eigene
+Suchleiste hat der Editor nicht — die Seite legt ihre darüber und steuert
+ihn damit; Cmd+G (F3) ohne Suche sucht den ausgewählten Text.
+
+## Vervollständigung
+
+Ein getipptes Wort (ab zwei Buchstaben) öffnet eine Liste dessen, was es
+beenden kann: zuerst die Vorschläge der Seite, dann die Wörter des Textes
+nahe dem Cursor. Pfeile bewegen, Enter oder Tab wählt, Escape schließt;
+Ctrl+Leertaste öffnet sie an jeder Stelle.
+
+```ts
+new CodeEditor(el, {
+  completion: async ({ prefix, pos, explicit, state }) => [
+    { label: 'console', detail: 'global', kind: 'variable' },
+    { label: 'constructor', insert: 'constructor()' },
+  ],
+  completeWords: true, // auch die Wörter des Textes (Standard)
+})
+editor.startCompletion()
+```
+
+## Einrückung und `.editorconfig`
+
+Ohne `indentUnit` rät der Editor sie aus dem Text (Tabs oder die häufigste
+Stufe aus Leerzeichen). Die Seite, die die Dateien hat, gibt die
+Einstellungen der `.editorconfig`:
+
+```ts
+import { editorConfigFor, indentOptions } from '@dskripchenko/code-editor'
+
+// Die .editorconfig-Dateien auf dem Weg zur Datei, nach ihrem Verzeichnis.
+const settings = editorConfigFor('/repo/src/main.ts', {
+  '/repo': rootEditorConfigText,
+  '/repo/src': srcEditorConfigText,
+})
+editor.configure(indentOptions(settings)) // { indentUnit: '  ', tabSize: 2 }
+settings.endOfLine // 'lf' | 'crlf'; insertFinalNewline, trimTrailingWhitespace — fürs Speichern
 ```
 
 ## Maus
