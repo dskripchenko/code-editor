@@ -1,5 +1,15 @@
 # @dskripchenko/code-editor
 
+## 0.3.0
+
+### Minor Changes
+
+- c03dbfe: Points for what a language knows, from the page (a language server, say): `hover` shows what is under a resting pointer, `signatureHelp` a call's parameters after `(` and `,` (and Mod+Shift+Space), `onModClick` takes a Cmd/Ctrl+click (going to a definition); `menu(items)` is a list at the cursor, `prompt(from, to)` a field over a word, `coordsAt`/`posAtPoint` map positions and points, `showTooltip` shows the page's own. Completion items may be snippets (`${1:name}` places) and replace a range of their own. Transactions and `dsk:change` carry `edits`: the changes as line and character (UTF-16) ranges, in the order to apply them.
+
+### Patch Changes
+
+- c03dbfe: The editor measures its lines again whenever their height or font changes (a hidden ruler watched by a `ResizeObserver`): made outside the page, or with `--dsk-code-editor-line-height` changed later, a click or a hover far down a file no longer lands lines below the pointer. A completion or menu item picked with a click keeps the cursor where the item went, and a tooltip stays open over transactions that move neither the text nor the cursor.
+
 ## 0.2.0
 
 ### Minor Changes
