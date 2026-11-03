@@ -16,6 +16,7 @@ export {
 } from './state/state'
 export type { Diagnostic } from './view/diagnostics'
 export type { Fold } from './view/folding'
+export type { GutterMark, Annotation } from './view/gutter'
 export { History } from './state/history'
 export * as commands from './commands'
 export type { Command, CommandContext } from './commands'

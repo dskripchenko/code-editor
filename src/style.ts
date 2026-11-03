@@ -18,6 +18,9 @@ const LIGHT = `
   --dsk-code-editor-error: #cf222e;
   --dsk-code-editor-warning: #9a6700;
   --dsk-code-editor-info: #0969da;
+  --dsk-code-editor-added: #2da44e;
+  --dsk-code-editor-modified: #0969da;
+  --dsk-code-editor-deleted: #cf222e;
   --dsk-code-editor-match: rgba(255, 196, 0, 0.35);
   --dsk-code-editor-match-current: rgba(255, 150, 0, 0.6);
   --dsk-code-editor-bracket: rgba(9, 105, 218, 0.18);
@@ -37,6 +40,9 @@ const DARK = `
   --dsk-code-editor-error: #ff7b72;
   --dsk-code-editor-warning: #e3b341;
   --dsk-code-editor-info: #58a6ff;
+  --dsk-code-editor-added: #3fb950;
+  --dsk-code-editor-modified: #58a6ff;
+  --dsk-code-editor-deleted: #f85149;
   --dsk-code-editor-match: rgba(187, 128, 9, 0.4);
   --dsk-code-editor-match-current: rgba(227, 179, 65, 0.6);
   --dsk-code-editor-bracket: rgba(56, 139, 253, 0.25);
@@ -86,6 +92,24 @@ dsk-code-editor { display: block; }
 .dsk-code-editor__gutter-lines > .dsk-code-editor__line { position: relative; }
 .dsk-code-editor__gutter-lines > .dsk-code-editor__line--error { color: var(--dsk-code-editor-error); }
 .dsk-code-editor__gutter-lines > .dsk-code-editor__line--warning { color: var(--dsk-code-editor-warning); }
+.dsk-code-editor__mark { position: absolute; top: 0; bottom: 0; left: -6px; width: 3px; cursor: pointer; }
+.dsk-code-editor__mark--added { background: var(--dsk-code-editor-added); }
+.dsk-code-editor__mark--modified { background: var(--dsk-code-editor-modified); }
+.dsk-code-editor__mark--deleted { top: auto; bottom: -3px; height: 6px; width: 6px; left: -7px; background: var(--dsk-code-editor-deleted); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.dsk-code-editor__annotation {
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--dsk-code-editor-annotation-width, 0px));
+  width: var(--dsk-code-editor-annotation-width, 0px);
+  padding-left: 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  color: var(--dsk-code-editor-gutter-fg);
+  font-size: 0.9em;
+  cursor: pointer;
+}
 .dsk-code-editor__fold {
   position: absolute;
   top: 0;
