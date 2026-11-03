@@ -1381,14 +1381,20 @@ export class CodeEditor {
       const lang = this.highlighting.active ? this.lang : null
       const big = doc.length > ANALYZE_LIMIT
       const text = lang && !big ? doc.toString() : ''
-      this.folding.setAvailable(
+      // Drawn again only when something changed (a redraw replaces the line elements).
+      let changed = this.folding.setAvailable(
         text ? foldRanges(text, lang!).map((r) => ({ start: r.start - 1, end: r.end - 1 })) : [],
       )
-      this.marks++
-      this.schedule()
       if (this.validating) {
         const found = text && canValidate(lang!) ? fromValidation(doc, validate(text, lang!)) : []
-        if (this.diagnosticsModel.set('syntax', found, doc.length)) this.toldDiagnostics()
+        if (this.diagnosticsModel.set('syntax', found, doc.length)) {
+          changed = true
+          this.toldDiagnostics()
+        }
+      }
+      if (changed) {
+        this.marks++
+        this.schedule()
       }
     }
     if (now) run()

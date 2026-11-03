@@ -22,14 +22,21 @@ export class Folding {
   private before: number[] = []
 
   /** Sets what can be folded; folds that no longer can are opened. */
-  setAvailable(ranges: readonly Fold[]): void {
-    this.available = new Map(ranges.map((r) => [r.start, r.end]))
+  setAvailable(ranges: readonly Fold[]): boolean {
+    const next = new Map(ranges.map((r) => [r.start, r.end]))
+    if (
+      next.size === this.available.size &&
+      [...next].every(([k, v]) => this.available.get(k) === v)
+    )
+      return false
+    this.available = next
     for (const [start, end] of this.folded) {
       const now = this.available.get(start)
       if (now === undefined) this.folded.delete(start)
       else if (now !== end) this.folded.set(start, now)
     }
     this.rebuild()
+    return true
   }
 
   /** The fold that starts on a line, if one can. */

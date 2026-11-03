@@ -167,7 +167,11 @@ test.describe('keys', () => {
     await expect(list).toBeVisible()
   })
 
-  test('copy without a selection takes the line; pasted, it goes above', async ({ page }) => {
+  test('copy without a selection takes the line; pasted, it goes above', async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName === 'firefox', 'Firefox gives a constructed paste event no data')
     await make(page, { value: 'first\nsecond' })
     await focus(page)
     await page.keyboard.press('ArrowDown')
