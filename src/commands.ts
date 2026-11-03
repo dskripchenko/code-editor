@@ -22,6 +22,12 @@ import {
 export interface CommandContext {
   /** Lines in a page, for Page Up and Page Down. */
   readonly pageLines: number
+  /** The rows on screen, when folded lines leave fewer rows than lines: moves up and down go by rows. */
+  readonly rows?: {
+    readonly count: number
+    rowOf(line: number): number
+    lineOf(row: number): number
+  }
 }
 
 export type Command = (state: EditorState, context: CommandContext) => TransactionSpec | null
@@ -85,10 +91,12 @@ function vertical(lines: (context: CommandContext) => number): Move {
     const { tabSize } = state.config
     const line = state.doc.lineAt(r.head)
     const goal = r.goal ?? columnAt(line.text, r.head - line.from, tabSize)
-    const target = line.index + lines(context)
-    if (target < 0) return SelectionRange.cursor(0, goal)
-    if (target >= state.doc.lineCount) return SelectionRange.cursor(state.doc.length, goal)
-    const next = state.doc.line(target)
+    const rows = context.rows
+    const row = (rows ? rows.rowOf(line.index) : line.index) + lines(context)
+    if (row < 0) return SelectionRange.cursor(0, goal)
+    if (row >= (rows ? rows.count : state.doc.lineCount))
+      return SelectionRange.cursor(state.doc.length, goal)
+    const next = state.doc.line(rows ? rows.lineOf(row) : row)
     return SelectionRange.cursor(next.from + offsetAt(next.text, goal, tabSize), goal)
   }
 }

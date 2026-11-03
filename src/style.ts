@@ -3,6 +3,8 @@
  * editor without touching its rules; light and dark follow `data-theme` on
  * an ancestor or the system.
  */
+import { THEME_CSS } from '@dskripchenko/syntax'
+
 const LIGHT = `
   --dsk-code-editor-bg: #ffffff;
   --dsk-code-editor-fg: #1f2328;
@@ -11,7 +13,11 @@ const LIGHT = `
   --dsk-code-editor-cursor: #1f2328;
   --dsk-code-editor-selection: rgba(84, 174, 255, 0.2);
   --dsk-code-editor-selection-focused: rgba(84, 174, 255, 0.4);
-  --dsk-code-editor-active-line: rgba(234, 238, 242, 0.5);`
+  --dsk-code-editor-active-line: rgba(234, 238, 242, 0.5);
+  --dsk-code-editor-folded-bg: rgba(175, 184, 193, 0.3);
+  --dsk-code-editor-error: #cf222e;
+  --dsk-code-editor-warning: #9a6700;
+  --dsk-code-editor-info: #0969da;`
 const DARK = `
   --dsk-code-editor-bg: #0d1117;
   --dsk-code-editor-fg: #e6edf3;
@@ -20,7 +26,16 @@ const DARK = `
   --dsk-code-editor-cursor: #e6edf3;
   --dsk-code-editor-selection: rgba(56, 139, 253, 0.2);
   --dsk-code-editor-selection-focused: rgba(56, 139, 253, 0.4);
-  --dsk-code-editor-active-line: rgba(110, 118, 129, 0.12);`
+  --dsk-code-editor-active-line: rgba(110, 118, 129, 0.12);
+  --dsk-code-editor-folded-bg: rgba(110, 118, 129, 0.4);
+  --dsk-code-editor-error: #ff7b72;
+  --dsk-code-editor-warning: #e3b341;
+  --dsk-code-editor-info: #58a6ff;`
+
+/** A squiggle under a diagnostic: a wave the background colour shows through. */
+const WAVE = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='6' height='4'><path d='M0 3 1.5 1 3 3 4.5 1 6 3' fill='none' stroke='black'/></svg>",
+)}")`
 
 export const CODE_EDITOR_CSS = `
 dsk-code-editor { display: block; }
@@ -55,7 +70,41 @@ dsk-code-editor { display: block; }
   text-align: right;
   user-select: none;
 }
-.dsk-code-editor__gutter-lines { position: absolute; top: 0; left: 0; right: 0; padding: 0 12px 0 8px; }
+.dsk-code-editor__gutter-lines { position: absolute; top: 0; left: 0; right: 0; padding: 0 18px 0 8px; }
+.dsk-code-editor__gutter-lines > .dsk-code-editor__line { position: relative; }
+.dsk-code-editor__gutter-lines > .dsk-code-editor__line--error { color: var(--dsk-code-editor-error); }
+.dsk-code-editor__gutter-lines > .dsk-code-editor__line--warning { color: var(--dsk-code-editor-warning); }
+.dsk-code-editor__fold {
+  position: absolute;
+  top: 0;
+  right: -16px;
+  width: 14px;
+  height: 100%;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.dsk-code-editor__fold::before { content: '\\25BE'; }
+.dsk-code-editor__fold--folded::before { content: '\\25B8'; }
+.dsk-code-editor__gutter:hover .dsk-code-editor__fold, .dsk-code-editor__fold--folded { opacity: 1; }
+.dsk-code-editor__line--folded::after {
+  content: '\\22EF';
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--dsk-code-editor-folded-bg);
+  color: var(--dsk-code-editor-gutter-fg);
+  cursor: pointer;
+}
+.dsk-code-editor__diagnostic {
+  position: absolute;
+  -webkit-mask: ${WAVE} repeat-x left center / 6px 4px;
+  mask: ${WAVE} repeat-x left center / 6px 4px;
+}
+.dsk-code-editor__diagnostic--error { background: var(--dsk-code-editor-error); }
+.dsk-code-editor__diagnostic--warning { background: var(--dsk-code-editor-warning); }
+.dsk-code-editor__diagnostic--info { background: var(--dsk-code-editor-info); }
 .dsk-code-editor__gutter-lines > .dsk-code-editor__line--active { color: var(--dsk-code-editor-gutter-active-fg); }
 .dsk-code-editor__content { position: relative; flex: 1 0 auto; cursor: text; outline: none; }
 .dsk-code-editor__lines { position: absolute; top: 0; left: 4px; white-space: pre; z-index: 1; }
@@ -114,7 +163,12 @@ export function ensureStyle(node: Node): void {
   styled.add(target)
   const style = (node.ownerDocument ?? document).createElement('style')
   style.dataset.dskCodeEditor = ''
-  style.textContent = CODE_EDITOR_CSS
+  // The tokens' colours: custom properties on the document (on the shadow root's host inside one).
+  const theme =
+    target instanceof ShadowRoot
+      ? THEME_CSS.replace(/:root:not\(([^)]*)\)/g, ':host(:not($1))').replaceAll(':root', ':host')
+      : THEME_CSS
+  style.textContent = CODE_EDITOR_CSS + theme
   if (target instanceof ShadowRoot) target.prepend(style)
   else target.head.prepend(style)
 }

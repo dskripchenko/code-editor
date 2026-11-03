@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@dskripchenko/syntax':
+        specifier: ^0.5.0
+        version: 0.5.0
     devDependencies:
       '@changesets/cli':
         specifier: ^3.0.3
@@ -121,6 +125,10 @@ packages:
   '@clack/prompts@1.8.1':
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
+
+  '@dskripchenko/syntax@0.5.0':
+    resolution: {integrity: sha512-rpea99C5y+oVqbUAlXWqavFJVvPjfQQhuwpiU1XVv7n+putN1jqn2RR3bTShvtAp8ZRxUYAzGRmo8OAhQ3p+1Q==}
+    engines: {node: '>=20'}
 
   '@eslint-community/eslint-utils@4.10.1':
     resolution: {integrity: sha512-cuadcxVFE8sDK6iWJbs8Sn0av2Nrh2QSGQhVlBW9AaAHqHwjWsZHT8LJ4hFGPh7ASBV2deFdM7H/DPjulmh8rg==}
@@ -1413,6 +1421,8 @@ snapshots:
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
+
+  '@dskripchenko/syntax@0.5.0': {}
 
   '@eslint-community/eslint-utils@4.10.1(eslint@10.14.0)':
     dependencies:

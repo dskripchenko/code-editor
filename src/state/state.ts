@@ -34,6 +34,26 @@ export interface Transaction {
   readonly scrollIntoView: boolean
   readonly addToHistory: boolean
   readonly docChanged: boolean
+  /** The lines it changed: lines `from` to `oldEnd` (excluded) of the text before are lines `from` to `newEnd` now. */
+  readonly lines: LineChange | null
+}
+
+export interface LineChange {
+  readonly from: number
+  readonly oldEnd: number
+  readonly newEnd: number
+}
+
+/** Two line changes, one after the other, as one. */
+export function composeLines(a: LineChange | null, b: LineChange | null): LineChange | null {
+  if (!a) return b
+  if (!b) return a
+  const end = Math.max(a.newEnd, b.oldEnd)
+  return {
+    from: Math.min(a.from, b.from),
+    oldEnd: end + a.oldEnd - a.newEnd,
+    newEnd: end + b.newEnd - b.oldEnd,
+  }
 }
 
 export function toChangeSet(changes: TransactionSpec['changes']): ChangeSet {
@@ -66,7 +86,15 @@ export class EditorState {
     const changes = toChangeSet(spec.changes)
     const inverse = changes.invert(this.doc)
     const selectionBefore = this.selection
-    changes.apply(this.doc)
+    let lines: LineChange | null = null
+    if (!changes.empty) {
+      const list = changes.changes
+      const from = this.doc.lineAt(list[0]!.from).index
+      const oldEnd = this.doc.lineAt(list[list.length - 1]!.to).index + 1
+      const count = this.doc.lineCount
+      changes.apply(this.doc)
+      lines = { from, oldEnd, newEnd: oldEnd + this.doc.lineCount - count }
+    }
     this.selection = (spec.selection ?? selectionBefore.map(changes)).clamp(this.doc.length)
     return {
       changes,
@@ -77,6 +105,7 @@ export class EditorState {
       scrollIntoView: spec.scrollIntoView ?? true,
       addToHistory: spec.addToHistory ?? !changes.empty,
       docChanged: !changes.empty,
+      lines,
     }
   }
 }

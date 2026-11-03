@@ -4,20 +4,26 @@
  * so a file of a million lines scrolls and edits as a small one; a very long
  * line (minified code) is drawn only around the columns in view.
  */
+import { canValidate, foldRanges, validate, type Token } from '@dskripchenko/syntax'
 import { selectedText, deleteSelection, insertText, wordAroundRange } from './commands'
 import { compileKeymap, defaultKeymap, keyName, type KeyBinding } from './keymap'
 import { Doc } from './state/doc'
 import { History } from './state/history'
 import { Selection, SelectionRange } from './state/selection'
 import {
+  composeLines,
   EditorState,
   type EditorConfig,
+  type LineChange,
   type Transaction,
   type TransactionSpec,
 } from './state/state'
 import { ensureStyle } from './style'
 import { detectLineBreak, type LineBreak } from './text'
 import { columnAt, offsetAt } from './text-measure'
+import { Diagnostics, fromValidation, type Diagnostic } from './view/diagnostics'
+import { Folding, type Fold } from './view/folding'
+import { fillLine, Highlighting } from './view/highlight'
 import { createInput, type Input, type InputHost } from './view/input'
 
 export interface CodeEditorOptions {
@@ -39,6 +45,8 @@ export interface CodeEditorOptions {
   input?: 'auto' | 'textarea'
   /** Bindings before the default ones (the first one bound to a key wins). */
   keymap?: readonly KeyBinding[]
+  /** Data formats (JSON, YAML, XML, TOML, CSV, INI, .env) checked as they are edited (on by default). */
+  validate?: boolean
 }
 
 /** Lines drawn above and below the view, so a scroll does not show them blank. */
@@ -55,6 +63,12 @@ const PAD = 4
  * placed by an offset.
  */
 const MAX_HEIGHT = 8_000_000
+/** Folding and the check of data formats read the whole text: above this many characters, neither. */
+const ANALYZE_LIMIT = 2_000_000
+/** The pause after typing before they read it again, in milliseconds. */
+const ANALYZE_DELAY = 300
+/** The fold markers' column in the gutter, in pixels. */
+const FOLD_WIDTH = 14
 /** A line of printable ASCII and tabs: its columns are its pixels. */
 const SIMPLE = /^[\x20-\x7e\t]*$/
 
@@ -81,7 +95,23 @@ export class CodeEditor {
   private lineHeight = 20
   private charWidth = 8
   private gutterWidth = 0
-  private drawn = { from: 0, to: 0, version: -1, longLeft: -1 }
+  private drawn = {
+    from: 0,
+    to: 0,
+    version: -1,
+    longLeft: -1,
+    settled: true,
+    /** The lines drawn, in order (folded ones are not). */
+    lines: [] as number[],
+    marks: -1,
+  }
+  private readonly highlighting: Highlighting
+  private readonly folding = new Folding()
+  private readonly diagnosticsModel = new Diagnostics()
+  private readonly validating: boolean
+  /** Changes when folds or diagnostics do: the lines are drawn again. */
+  private marks = 0
+  private analyzeTimer = 0
   private longest = { version: -1, length: 0 }
   private composition: readonly { from: number; to: number }[] = []
   private frame = 0
@@ -125,12 +155,24 @@ export class CodeEditor {
     this.readOnlyFlag = options.readOnly ?? false
     this.content.setAttribute('aria-readonly', String(this.readOnlyFlag))
     this.onChange = options.onChange
+    this.validating = options.validate !== false
     this.config = { tabSize: options.tabSize ?? 4, indentUnit: options.indentUnit ?? '    ' }
     this.linesEl.style.tabSize = String(this.config.tabSize)
     this.keys = compileKeymap([...(options.keymap ?? []), ...defaultKeymap])
     const value = options.value ?? ''
     this.lineBreak = detectLineBreak(value)
     this.editorState = new EditorState(new Doc(value), Selection.single(0), this.config)
+    this.highlighting = new Highlighting(
+      () => this.editorState.doc,
+      doc.defaultView ?? window,
+      () => {
+        // Lines in view drawn from a guess: drawn again once they are settled.
+        if (!this.drawn.settled && this.highlighting.settled(this.drawn.to)) {
+          this.drawn.version = -1
+          this.schedule()
+        }
+      },
+    )
     this.language = options.language ?? null
 
     this.input = createInput(this.host(), options.input ?? 'auto')
@@ -139,6 +181,7 @@ export class CodeEditor {
     this.measure()
     this.on(this.dom, 'scroll', () => this.schedule())
     this.on(this.content, 'mousedown', (e) => this.onMouseDown(e as MouseEvent))
+    this.on(this.gutter, 'mousedown', (e) => this.onGutterDown(e as MouseEvent))
     const fonts = doc.fonts as FontFaceSet | undefined
     if (fonts) this.on(fonts, 'loadingdone', () => this.remeasure())
     this.resize =
@@ -159,6 +202,10 @@ export class CodeEditor {
     this.lineBreak = detectLineBreak(value)
     this.editorState = new EditorState(new Doc(value), Selection.single(0), this.config)
     this.history.clear()
+    this.highlighting.reset()
+    this.folding.setAvailable([])
+    this.diagnosticsModel.clear()
+    this.analyze()
     this.drawn.version = -1
     this.dom.scrollTop = 0
     this.dom.scrollLeft = 0
@@ -175,10 +222,15 @@ export class CodeEditor {
     return this.lang
   }
 
+  /** Set to another language, the text is highlighted again; one not known leaves it plain. */
   set language(language: string | null) {
     this.lang = language
     if (language) this.dom.dataset.language = language
     else delete this.dom.dataset.language
+    this.highlighting.setLanguage(language)
+    this.drawn.version = -1
+    this.analyze()
+    this.schedule()
   }
 
   get readOnly(): boolean {
@@ -225,9 +277,54 @@ export class CodeEditor {
     return this.input.hasFocus()
   }
 
+  /** What is wrong with the text: the editor's own check, and what `setDiagnostics` gave. */
+  get diagnostics(): readonly Diagnostic[] {
+    this.flushAnalysis()
+    return this.diagnosticsModel.list
+  }
+
+  /** Sets the diagnostics of one source (a language server, a linter); an empty list clears them. */
+  setDiagnostics(list: readonly Diagnostic[], source = 'external'): void {
+    if (!this.diagnosticsModel.set(source, list, this.editorState.doc.length)) return
+    this.marksChanged()
+    this.toldDiagnostics()
+  }
+
+  /** The folded ranges (0-based lines: the first stays in view). */
+  get folds(): Fold[] {
+    return this.folding.folds
+  }
+
+  /** Folds the range that starts on a line (0-based), or the innermost one around it; the main cursor's line by default. */
+  fold(line = this.cursorLine()): boolean {
+    this.flushAnalysis()
+    const done = this.folding.fold(line)
+    if (done) this.afterFold()
+    return done
+  }
+
+  /** Opens the fold on or around a line (0-based); the main cursor's line by default. */
+  unfold(line = this.cursorLine()): boolean {
+    const done = this.folding.unfold(line)
+    if (done) this.marksChanged()
+    return done
+  }
+
+  foldAll(): void {
+    this.flushAnalysis()
+    this.folding.foldAll()
+    this.afterFold()
+  }
+
+  unfoldAll(): void {
+    if (this.folding.unfoldAll()) this.marksChanged()
+  }
+
   /** Takes the editor off the page. */
   destroy(): void {
     cancelAnimationFrame(this.frame)
+    this.highlighting.destroy()
+    clearTimeout(this.analyzeTimer)
     this.stopDrag()
     this.resize?.disconnect()
     for (const off of this.cleanup) off()
@@ -251,6 +348,20 @@ export class CodeEditor {
   }
 
   private after(trs: Transaction[], fromInput: boolean): void {
+    let lines: LineChange | null = null
+    for (const t of trs) {
+      lines = composeLines(lines, t.lines)
+      if (t.docChanged) this.diagnosticsModel.map(t.changes)
+    }
+    if (lines) {
+      this.highlighting.edit(lines)
+      this.folding.map(lines)
+      this.marks++
+      this.analyze()
+    }
+    // A cursor moved into folded lines opens their fold.
+    const { doc, selection } = this.editorState
+    if (this.folding.reveal(selection.ranges.map((r) => doc.lineAt(r.head).index))) this.marks++
     this.draw()
     if (trs.some((t) => t.scrollIntoView)) this.scrollToCursor()
     if (!fromInput) this.input.sync()
@@ -311,8 +422,20 @@ export class CodeEditor {
       else this.redo()
     } else if (run === 'copy' || run === 'cut' || run === 'paste') {
       return false
+    } else if (run === 'fold' || run === 'unfold') {
+      if (run === 'fold') this.fold()
+      else this.unfold()
     } else {
-      const spec = run(this.editorState, { pageLines: this.pageLines() })
+      const folding = this.folding
+      const count = this.editorState.doc.lineCount
+      const spec = run(this.editorState, {
+        pageLines: this.pageLines(),
+        rows: {
+          count: folding.rowCount(count),
+          rowOf: (line) => folding.rowOf(line),
+          lineOf: (row) => folding.lineOf(row),
+        },
+      })
       if (!spec) {
         // Escape with one cursor is the page's (a dialog may close on it).
         if (event.key === 'Escape') return false
@@ -380,7 +503,22 @@ export class CodeEditor {
       index >= this.drawn.to
     )
       return null
-    return (this.linesEl.children[index - this.drawn.from] as HTMLElement | undefined) ?? null
+    const k = this.drawnIndex(index)
+    return k < 0 ? null : ((this.linesEl.children[k] as HTMLElement | undefined) ?? null)
+  }
+
+  /** Where a line is among the drawn ones; -1 when it is not drawn. */
+  private drawnIndex(index: number): number {
+    const lines = this.drawn.lines
+    let lo = 0
+    let hi = lines.length - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (lines[mid] === index) return mid
+      if (lines[mid]! < index) lo = mid + 1
+      else hi = mid - 1
+    }
+    return -1
   }
 
   /** The x of a character offset in a line, from the text's left edge. */
@@ -416,13 +554,12 @@ export class CodeEditor {
   private posAtCoords(clientX: number, clientY: number): number {
     const doc = this.editorState.doc
     const box = this.content.getBoundingClientRect()
-    const index = Math.max(
+    const rows = this.folding.rowCount(doc.lineCount)
+    const row = Math.max(
       0,
-      Math.min(
-        doc.lineCount - 1,
-        Math.floor((clientY - box.top - this.offsetY()) / this.lineHeight),
-      ),
+      Math.min(rows - 1, Math.floor((clientY - box.top - this.offsetY()) / this.lineHeight)),
     )
+    const index = this.folding.lineOf(row)
     const line = doc.line(index)
     const x = clientX - box.left - PAD
     const el =
@@ -475,7 +612,7 @@ export class CodeEditor {
 
   /** Text pixels per scrolled pixel: 1, unless the text is taller than `MAX_HEIGHT`. */
   private scale(): number {
-    const real = this.editorState.doc.lineCount * this.lineHeight
+    const real = this.folding.rowCount(this.editorState.doc.lineCount) * this.lineHeight
     if (real <= MAX_HEIGHT) return 1
     const view = this.dom.clientHeight
     return (real - view) / Math.max(1, MAX_HEIGHT - view)
@@ -489,7 +626,7 @@ export class CodeEditor {
 
   /** A line's top in the content's pixels. */
   private lineTop(index: number): number {
-    return index * this.lineHeight + this.offsetY()
+    return this.folding.rowOf(index) * this.lineHeight + this.offsetY()
   }
 
   private schedule(): void {
@@ -500,8 +637,9 @@ export class CodeEditor {
     })
   }
 
+  /** The rows in view, with a margin. */
   private viewport(): { from: number; to: number } {
-    const count = this.editorState.doc.lineCount
+    const count = this.folding.rowCount(this.editorState.doc.lineCount)
     const height = this.dom.clientHeight
     if (height === 0) return { from: 0, to: Math.min(count, 2 * BUFFER) }
     const top = this.dom.scrollTop * this.scale()
@@ -514,14 +652,20 @@ export class CodeEditor {
   private draw(): void {
     const doc = this.editorState.doc
     const count = doc.lineCount
-    this.gutterWidth = this.showNumbers ? Math.ceil(String(count).length * this.charWidth + 20) : 0
+    this.gutterWidth = this.showNumbers
+      ? Math.ceil(String(count).length * this.charWidth + 20 + FOLD_WIDTH)
+      : 0
     this.gutter.style.width = `${this.gutterWidth}px`
-    this.sizer.style.height = `${Math.min(count * this.lineHeight, MAX_HEIGHT)}px`
+    const rows = this.folding.rowCount(count)
+    this.sizer.style.height = `${Math.min(rows * this.lineHeight, MAX_HEIGHT)}px`
     if (this.longest.version !== doc.version)
       this.longest = { version: doc.version, length: doc.longestLine() }
     this.content.style.minWidth = `${Math.ceil(PAD * 2 + (this.longest.length + 2) * this.charWidth)}px`
 
-    const { from, to } = this.viewport()
+    const view = this.viewport()
+    const visible = this.folding.linesOfRows(view.from, view.to, count)
+    const from = visible[0] ?? 0
+    const to = visible.length ? visible[visible.length - 1]! + 1 : 0
     const cols = Math.ceil(this.dom.clientWidth / this.charWidth)
     const longLeft = Math.max(0, Math.floor(this.dom.scrollLeft / this.charWidth) - LONG_MARGIN)
     const longMoved = Math.abs(longLeft - this.drawn.longLeft) > LONG_MARGIN / 2
@@ -529,30 +673,56 @@ export class CodeEditor {
       from !== this.drawn.from ||
       to !== this.drawn.to ||
       doc.version !== this.drawn.version ||
+      this.marks !== this.drawn.marks ||
       longMoved
     ) {
       const d = this.dom.ownerDocument
       const lines = d.createDocumentFragment()
       const numbers = d.createDocumentFragment()
-      for (let i = from; i < to; i++) {
+      const tokens = this.visibleTokens(visible)
+      const marks = this.lineMarks(from, to)
+      visible.forEach((i, k) => {
         const text = doc.lineText(i)
         const line = d.createElement('div')
         line.className = 'dsk-code-editor__line'
+        const folded = this.folding.isFolded(i)
+        if (folded) line.classList.add('dsk-code-editor__line--folded')
+        const mark = marks.get(i)
+        if (mark) line.title = mark.messages.join('\n')
+        const row = tokens[k] ?? null
         if (text.length > LONG_LINE) {
-          line.textContent = text.slice(longLeft, longLeft + cols + 2 * LONG_MARGIN)
+          fillLine(line, text, row, longLeft, longLeft + cols + 2 * LONG_MARGIN)
           line.style.paddingLeft = `${longLeft * this.charWidth}px`
-        } else line.textContent = text
+        } else fillLine(line, text, row)
         lines.append(line)
         if (this.showNumbers) {
           const n = d.createElement('div')
           n.className = 'dsk-code-editor__line'
-          n.textContent = String(i + 1)
-          numbers.append(n)
+          if (mark) {
+            n.classList.add(`dsk-code-editor__line--${mark.severity}`)
+            n.title = mark.messages.join('\n')
+          }
+          n.append(String(i + 1))
+          if (this.folding.availableAt(i)) {
+            const m = d.createElement('span')
+            m.className = `dsk-code-editor__fold${folded ? ' dsk-code-editor__fold--folded' : ''}`
+            m.dataset.line = String(i)
+            numbers.append(n)
+            n.append(m)
+          } else numbers.append(n)
         }
-      }
+      })
       this.linesEl.replaceChildren(lines)
       this.gutterLines.replaceChildren(numbers)
-      this.drawn = { from, to, version: doc.version, longLeft }
+      this.drawn = {
+        from,
+        to,
+        version: doc.version,
+        longLeft,
+        settled: this.highlighting.settled(to),
+        lines: visible,
+        marks: this.marks,
+      }
     }
     this.linesEl.style.transform = `translateY(${this.lineTop(from)}px)`
     this.gutterLines.style.transform = this.linesEl.style.transform
@@ -585,6 +755,7 @@ export class CodeEditor {
       const b = r.empty ? a : doc.lineAt(r.to)
       if (r.empty) active.add(a.index)
       for (let i = Math.max(first, a.index); i <= Math.min(last - 1, b.index) && !r.empty; i++) {
+        if (this.folding.isHidden(i)) continue
         const line = i === a.index ? a : i === b.index ? b : doc.line(i)
         const x1 = i === a.index ? this.xAt(i, r.from - a.from) : 0
         const x2 =
@@ -610,6 +781,29 @@ export class CodeEditor {
     for (const i of active)
       if (i >= first && i < last)
         selections.prepend(rect('dsk-code-editor__active-line', 0, this.lineTop(i), 0))
+    for (const g of this.diagnosticsModel.list) {
+      if (g.to < doc.lineStart(first) || (last < doc.lineCount && g.from > doc.lineStart(last)))
+        continue
+      const a = doc.lineAt(g.from)
+      const b = doc.lineAt(g.to)
+      for (let i = Math.max(first, a.index); i <= Math.min(last - 1, b.index); i++) {
+        if (this.folding.isHidden(i)) continue
+        const line = i === a.index ? a : i === b.index ? b : doc.line(i)
+        const x1 = i === a.index ? this.xAt(i, g.from - a.from) : 0
+        let x2 = i === b.index ? this.xAt(i, g.to - b.from) : this.xAt(i, line.text.length)
+        // An empty range (an error at the end of the text): a mark a character wide.
+        if (x2 - x1 < 2) x2 = x1 + this.charWidth
+        cursors.append(
+          rect(
+            `dsk-code-editor__diagnostic dsk-code-editor__diagnostic--${g.severity}`,
+            PAD + x1,
+            this.lineTop(i) + lh - 4,
+            x2 - x1,
+            4,
+          ),
+        )
+      }
+    }
     for (const c of this.composition) {
       const a = doc.lineAt(c.from)
       if (a.index < first || a.index >= last || c.to <= c.from) continue
@@ -623,7 +817,10 @@ export class CodeEditor {
     this.cursorsEl.replaceChildren(cursors)
     const numbers = this.gutterLines.children
     for (let i = 0; i < numbers.length; i++)
-      numbers[i]!.classList.toggle('dsk-code-editor__line--active', active.has(first + i))
+      numbers[i]!.classList.toggle(
+        'dsk-code-editor__line--active',
+        active.has(this.drawn.lines[i] ?? -1),
+      )
 
     // The input sits at the main cursor: the IME's window opens there.
     const main = selection.main
@@ -645,7 +842,7 @@ export class CodeEditor {
     const head = selection.main.head
     const line = doc.lineAt(head)
     const lh = this.lineHeight
-    const top = line.index * lh
+    const top = this.folding.rowOf(line.index) * lh
     const { scrollTop, clientHeight, scrollLeft, clientWidth } = this.dom
     // In the text's own pixels (a scaled scroll is converted back at the end).
     const scale = this.scale()
@@ -665,6 +862,120 @@ export class CodeEditor {
     }
   }
 
+  /** Tokens of the drawn lines, a run of lines next to each other at a time (never the folded ones). */
+  private visibleTokens(lines: readonly number[]): (readonly Token[] | null)[] {
+    if (!this.highlighting.active) return []
+    const out: (readonly Token[] | null)[] = []
+    let k = 0
+    while (k < lines.length) {
+      let end = k + 1
+      while (end < lines.length && lines[end] === lines[end - 1]! + 1) end++
+      const rows = this.highlighting.tokens(lines[k]!, lines[end - 1]! + 1) ?? []
+      for (const r of rows) out.push(r)
+      k = end
+    }
+    return out
+  }
+
+  /** The diagnostics on lines `from` to `to`, by line: the worst severity and the messages. */
+  private lineMarks(
+    from: number,
+    to: number,
+  ): Map<number, { severity: Diagnostic['severity']; messages: string[] }> {
+    const out = new Map<number, { severity: Diagnostic['severity']; messages: string[] }>()
+    const doc = this.editorState.doc
+    const rank = { error: 2, warning: 1, info: 0 }
+    for (const g of this.diagnosticsModel.list) {
+      const line = doc.lineAt(g.from).index
+      if (line < from || line >= to) continue
+      const mark = out.get(line)
+      if (!mark) out.set(line, { severity: g.severity, messages: [g.message] })
+      else {
+        mark.messages.push(g.message)
+        if (rank[g.severity] > rank[mark.severity]) mark.severity = g.severity
+      }
+    }
+    return out
+  }
+
+  private cursorLine(): number {
+    const { doc, selection } = this.editorState
+    return doc.lineAt(selection.main.head).index
+  }
+
+  /** Folded: cursors inside the fold go to its first line. */
+  private afterFold(): void {
+    const { doc, selection } = this.editorState
+    if (selection.ranges.some((r) => this.folding.isHidden(doc.lineAt(r.head).index))) {
+      const ranges = selection.ranges.map((r) => {
+        const index = doc.lineAt(r.head).index
+        if (!this.folding.isHidden(index)) return r
+        let start = index
+        while (start > 0 && this.folding.isHidden(start)) start--
+        return SelectionRange.cursor(doc.lineEnd(start))
+      })
+      this.editorState.selection = Selection.create(ranges, selection.mainIndex)
+      this.input.sync()
+    }
+    this.marksChanged()
+  }
+
+  private marksChanged(): void {
+    this.marks++
+    this.draw()
+  }
+
+  /**
+   * Folds and the check of data formats, read from the whole text a moment
+   * after it changes (at once with `now`).
+   */
+  private analyze(now = false): void {
+    clearTimeout(this.analyzeTimer)
+    const run = (): void => {
+      this.analyzeTimer = 0
+      const doc = this.editorState.doc
+      const lang = this.highlighting.active ? this.lang : null
+      const big = doc.length > ANALYZE_LIMIT
+      const text = lang && !big ? doc.toString() : ''
+      this.folding.setAvailable(
+        text ? foldRanges(text, lang!).map((r) => ({ start: r.start - 1, end: r.end - 1 })) : [],
+      )
+      this.marks++
+      this.schedule()
+      if (this.validating) {
+        const found = text && canValidate(lang!) ? fromValidation(doc, validate(text, lang!)) : []
+        if (this.diagnosticsModel.set('syntax', found, doc.length)) this.toldDiagnostics()
+      }
+    }
+    if (now) run()
+    else this.analyzeTimer = setTimeout(run, ANALYZE_DELAY) as unknown as number
+  }
+
+  /** What is waiting to be read again, read now. */
+  private flushAnalysis(): void {
+    if (this.analyzeTimer) this.analyze(true)
+  }
+
+  private toldDiagnostics(): void {
+    this.dom.dispatchEvent(
+      new CustomEvent('dsk:diagnostics', {
+        bubbles: true,
+        detail: { diagnostics: this.diagnosticsModel.list },
+      }),
+    )
+  }
+
+  private onGutterDown(event: MouseEvent): void {
+    const marker = (event.target as Element).closest?.(
+      '.dsk-code-editor__fold',
+    ) as HTMLElement | null
+    if (!marker || event.button !== 0) return
+    event.preventDefault()
+    const line = Number(marker.dataset.line)
+    if (this.folding.isFolded(line)) this.unfold(line)
+    else this.fold(line)
+  }
+
   // The pointer --------------------------------------------------------------
 
   private onMouseDown(event: MouseEvent): void {
@@ -672,6 +983,15 @@ export class CodeEditor {
     event.preventDefault()
     this.input.focus()
     const pos = this.posAtCoords(event.clientX, event.clientY)
+    // A click on a folded line's placeholder, past its text: the fold opens.
+    const at = this.editorState.doc.lineAt(pos)
+    if (this.folding.isFolded(at.index) && pos === at.to) {
+      const box = this.content.getBoundingClientRect()
+      if (event.clientX > box.left + PAD + this.xAt(at.index, at.text.length) + 4) {
+        this.unfold(at.index)
+        return
+      }
+    }
     const unit = (((Math.max(1, event.detail) - 1) % 3) + 1) as 1 | 2 | 3
     const origin = this.unitAround(pos, unit)
     const state = this.editorState
