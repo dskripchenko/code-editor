@@ -13,6 +13,11 @@ export interface CompletionItem {
   readonly detail?: string
   /** What it is (`function`, `variable`, `keyword`, `word`…): a class on its row. */
   readonly kind?: string
+  /** Inserted as a snippet: `$1`, `${2:name}` are places, the first selected; `$0` the end. */
+  readonly snippet?: string
+  /** The range it replaces (offsets), when not the word before the cursor. */
+  readonly from?: number
+  readonly to?: number
 }
 
 export interface CompletionContext {

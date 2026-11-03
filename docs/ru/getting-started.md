@@ -206,6 +206,31 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 Диапазоны сдвигаются при правке, пока следующая проверка их не заменит.
 Сворачивание и проверка читают весь текст; больше 2 МБ они не работают.
 
+## Наведение, параметры, определения, меню
+
+Что знает язык, даёт страница (например, языковой сервер); редактор это
+показывает:
+
+```ts
+new CodeEditor(el, {
+  hover: async ({ pos }) => describe(pos), // строка или элемент; null — ничего
+  signatureHelp: async ({ pos, explicit }) => parametersAt(pos), // после ( и , — и по Mod+Shift+Space
+  onModClick: (pos) => (goToDefinition(pos), true), // щелчок с Cmd (macOS) или Ctrl
+  completion: async () => [{ label: 'log', snippet: 'log(${1:message})$0' }], // места, первое выделено
+})
+editor.menu([{ label: 'Add import' }, { label: 'Extract', detail: 'function' }]) // выбранный индекс или null
+editor.prompt(from, to) // поле над словом (новое имя): что ввели, или null
+editor.coordsAt(pos) // прямоугольник позиции на экране; posAtPoint(x, y) — обратно
+editor.showTooltip(content, pos) // своя подсказка страницы; closeTooltip()
+```
+
+Неподвижный указатель через мгновение показывает подсказку; подсказка уходит,
+когда меняется текст или курсор, или по Escape. Элемент дополнения может
+заменять свой диапазон (`from`, `to`). Каждое `dsk:change` несёт `edits` —
+изменения диапазонами строк и символов (UTF-16), каждое относительно текста,
+оставленного предыдущим (пошаговая синхронизация языкового сервера); у
+транзакции они в `transaction.edits`.
+
 ## Метки и подписи на полях
 
 ```ts

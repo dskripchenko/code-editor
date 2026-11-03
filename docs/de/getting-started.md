@@ -209,6 +209,32 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 Die Bereiche wandern mit Änderungen, bis die nächste Prüfung sie ersetzt.
 Falten und Prüfen lesen den ganzen Text; über 2 MB läuft beides nicht.
 
+## Hover, Parameter, Definitionen, Menüs
+
+Was eine Sprache weiß, kommt von der Seite (etwa einem Language Server); der
+Editor zeigt es:
+
+```ts
+new CodeEditor(el, {
+  hover: async ({ pos }) => describe(pos), // ein Text oder ein Element; null für nichts
+  signatureHelp: async ({ pos, explicit }) => parametersAt(pos), // nach ( und , — und mit Mod+Shift+Space
+  onModClick: (pos) => (goToDefinition(pos), true), // ein Klick mit Cmd (macOS) oder Strg
+  completion: async () => [{ label: 'log', snippet: 'log(${1:message})$0' }], // Stellen, die erste ausgewählt
+})
+editor.menu([{ label: 'Add import' }, { label: 'Extract', detail: 'function' }]) // der gewählte Index oder null
+editor.prompt(from, to) // ein Feld über einem Wort (ein neuer Name): das Getippte oder null
+editor.coordsAt(pos) // das Rechteck einer Position auf dem Bildschirm; posAtPoint(x, y) umgekehrt
+editor.showTooltip(content, pos) // ein eigener Tooltip der Seite; closeTooltip()
+```
+
+Ein ruhender Zeiger zeigt den Hover nach einem Moment; ein Tooltip verschwindet,
+wenn sich Text oder Cursor bewegen, oder mit Escape. Ein
+Vervollständigungseintrag kann einen eigenen Bereich ersetzen (`from`, `to`).
+Jedes `dsk:change` trägt `edits` — die Änderungen als Zeilen- und
+Zeichenbereiche (UTF-16), jede gegen den Text, den die vorige ließ (die
+inkrementelle Synchronisation eines Language Servers); die einer Transaktion
+stehen in `transaction.edits`.
+
 ## Marken und Anmerkungen im Rand
 
 ```ts

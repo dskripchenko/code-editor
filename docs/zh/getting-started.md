@@ -184,6 +184,27 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 
 范围随编辑移动，直到下一次校验替换它们。折叠和校验读取整个文本；超过 2 MB 时两者都不运行。
 
+## 悬停、参数、定义、菜单
+
+语言的知识由页面提供（例如语言服务器）；编辑器负责显示：
+
+```ts
+new CodeEditor(el, {
+  hover: async ({ pos }) => describe(pos), // 字符串或元素；null 表示无
+  signatureHelp: async ({ pos, explicit }) => parametersAt(pos), // 在 ( 和 , 之后——也可用 Mod+Shift+Space
+  onModClick: (pos) => (goToDefinition(pos), true), // 按住 Cmd（macOS）或 Ctrl 点击
+  completion: async () => [{ label: 'log', snippet: 'log(${1:message})$0' }], // 占位，选中第一个
+})
+editor.menu([{ label: 'Add import' }, { label: 'Extract', detail: 'function' }]) // 选中的序号，或 null
+editor.prompt(from, to) // 单词上方的输入框（新名称）：输入的内容，或 null
+editor.coordsAt(pos) // 位置在屏幕上的矩形；posAtPoint(x, y) 反向换算
+editor.showTooltip(content, pos) // 页面自己的提示；closeTooltip()
+```
+
+指针停留片刻后显示悬停提示；文本或光标移动、或按 Escape 时提示消失。补全项可以替换自己的范围（`from`、`to`）。
+每个 `dsk:change` 都带有 `edits`——以行和字符（UTF-16）范围表示的更改，每项都相对于前一项留下的文本
+（语言服务器的增量同步）；事务的更改在 `transaction.edits` 中。
+
 ## 行号栏中的标记与注释
 
 ```ts

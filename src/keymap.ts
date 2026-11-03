@@ -21,6 +21,7 @@ export type KeyAction =
   | 'findPrevious'
   | 'complete'
   | 'jumpToBracket'
+  | 'signatureHelp'
 
 export interface KeyBinding {
   readonly key: string
@@ -173,6 +174,7 @@ export const defaultKeymap: readonly KeyBinding[] = [
   { key: 'F3', mac: 'Meta-g', run: 'findNext', readOnly: true },
   { key: 'Shift-F3', mac: 'Meta-Shift-g', run: 'findPrevious', readOnly: true },
   { key: 'Ctrl-Space', run: 'complete' },
+  { key: 'Mod-Shift-Space', run: 'signatureHelp' },
   { key: 'Mod-Shift-\\', run: 'jumpToBracket', readOnly: true },
   { key: 'Delete', run: c.deleteCharForward },
   { key: 'Ctrl-Backspace', mac: 'Alt-Backspace', run: c.deleteWordBackward },
