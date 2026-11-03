@@ -99,7 +99,7 @@ for (const input of ['auto', 'textarea'] as const) {
       await expectValue(page, 'first line\n2nd line\nthird')
     })
 
-    test('copy, cut and paste', async ({ page }) => {
+    test('copy, cut and paste', async ({ page, browserName }) => {
       await make(page, { value: 'one two', input })
       await focus(page)
       await page.keyboard.press(`${WORD}+Shift+ArrowRight`)
@@ -122,6 +122,8 @@ for (const input of ['auto', 'textarea'] as const) {
       expect(await run('copy')).toBe('one')
       expect(await run('cut')).toBe('one')
       await expectValue(page, ' two')
+      // Firefox gives a constructed paste event no data: its paste is checked by keys (below).
+      if (browserName === 'firefox') return
       await page.keyboard.press('End')
       await run('paste', ' three\r\nfour')
       await expectValue(page, ' two three\nfour')
@@ -170,11 +172,9 @@ for (const input of ['auto', 'textarea'] as const) {
 }
 
 test('the system clipboard, by keys', async ({ page, browserName, context }) => {
-  test.skip(
-    browserName !== 'chromium' || process.platform === 'darwin',
-    'headless Chromium copies by keys on Linux and Windows',
-  )
-  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  test.skip(process.platform === 'darwin', 'headless browsers on macOS do not copy by keys')
+  if (browserName === 'chromium')
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await load(page)
   await make(page, { value: 'copy me' })
   await focus(page)
