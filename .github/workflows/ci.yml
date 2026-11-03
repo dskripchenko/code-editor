@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint, types, tests, build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Runtime dependencies are only our own packages
+        run: node -e "const p=require('./package.json'); const bad=Object.keys(p.dependencies||{}).filter(n=>!n.startsWith('@dskripchenko/')); if (bad.length) { console.error('unexpected dependencies: '+bad.join(', ')); process.exit(1) }"
+
+  browser:
+    name: Browsers (Chromium, WebKit, Firefox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The browsers and their system libraries come with the image (matching the
+    # playwright version in the lockfile): no apt, whose mirrors stall.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:browser
+        env:
+          HOME: /root
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright
+          path: test-results

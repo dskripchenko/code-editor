@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>code-editor</title>
+    <style>
+      body { margin: 0; padding: 16px; font-family: system-ui, sans-serif; }
+      .host { height: 240px; border: 1px solid #d0d7de; }
+      .host > .dsk-code-editor { height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="plain" class="host"></div>
+    <dsk-code-editor id="element" class="host" language="typescript"><script type="text/plain">const a = '<b>not markup</b>'
+const b = 2
+</script></dsk-code-editor>
+    <script type="module">
+      import * as api from '/src/index.ts'
+      api.defineCodeEditor()
+      window.api = api
+      window.plain = new api.CodeEditor(document.getElementById('plain'), { value: 'one\r\ntwo\r\nthree\r\n', language: 'text' })
+      window.ready = true
+    </script>
+  </body>
+</html>
