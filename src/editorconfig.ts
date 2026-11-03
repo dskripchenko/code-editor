@@ -96,16 +96,15 @@ function globToRegExp(pattern: string): RegExp {
  * the nearest wins, a `root = true` file ends the way up.
  */
 export function editorConfigFor(path: string, files: Record<string, string>): EditorConfigSettings {
-  const norm = path.replace(/\\/g, '/')
-  const dirs = Object.keys(files)
-    .map((d) => d.replace(/\\/g, '/').replace(/\/$/, ''))
-    .filter((d) => norm.startsWith(d + '/'))
-    .sort((a, b) => a.length - b.length)
+  const slash = (p: string) => p.replace(/\\/g, '/').replace(/\/$/, '')
+  const norm = slash(path)
+  // By the directory, in forward slashes (a Windows path as well), with the text the page gave for it.
+  const dirs = Object.entries(files)
+    .map(([dir, text]) => ({ dir: slash(dir), text }))
+    .filter((d) => norm.startsWith(d.dir + '/'))
+    .sort((a, b) => a.dir.length - b.dir.length)
   // From the root down: the last root file and everything below it.
-  const parsed = dirs.map((d) => ({
-    dir: d,
-    ...parseEditorConfig(files[d] ?? files[d + '/'] ?? ''),
-  }))
+  const parsed = dirs.map((d) => ({ dir: d.dir, ...parseEditorConfig(d.text) }))
   let start = 0
   parsed.forEach((p, i) => {
     if (p.root) start = i
