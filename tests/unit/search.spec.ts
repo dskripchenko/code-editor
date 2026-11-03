@@ -66,6 +66,17 @@ describe('.editorconfig', () => {
     expect(indentOptions(editorConfigFor('/repo/m.go', files)).indentUnit).toBe('\t')
   })
 
+  it('Windows paths: the directories and the file in backslashes', () => {
+    const win = {
+      'C:\\repo': 'root = true\n[*.ts]\nindent_size = 3\n',
+      'C:\\repo\\src\\': '[*.ts]\nindent_style = tab\n',
+    }
+    expect(editorConfigFor('C:\\repo\\src\\a.ts', win)).toMatchObject({
+      indentSize: 3,
+      indentStyle: 'tab',
+    })
+  })
+
   it('a guess at the indentation', () => {
     expect(detectIndent('a {\n  b {\n    c\n  }\n}')).toBe('  ')
     expect(detectIndent('a\n\tb\n\t\tc')).toBe('\t')
