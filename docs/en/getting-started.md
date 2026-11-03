@@ -220,13 +220,13 @@ defineCodeEditor() // <dsk-code-editor>; defineCodeEditor('my-editor') for anoth
 
 The text is read from a `<script type="text/plain">` inside the element, so
 nothing in it is taken as markup; the `value` property reads and replaces it,
-`readonly` makes it read-only. Every change sends `dsk:change`, its
+`readonly` makes it read-only. Every move of the cursors sends `dsk:selection` (its `detail.selection`, for a status line). Every change sends `dsk:change`, its
 `detail.source` the text. The element keeps its text when it is moved in the
 page.
 
 ## Line breaks
 
-A text keeps the line break it came with (`\n` or `\r\n`, the first one met);
+`editor.lineBreak` is the one in use. A text keeps the line break it came with (`\n` or `\r\n`, the first one met);
 pasted text takes it too. `readText`, `writeText` and `detectLineBreak` are
 the helpers.
 

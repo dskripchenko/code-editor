@@ -51,7 +51,7 @@ sie selbst einbinden will.
 
 ## Den Text aus Code ändern
 
-Jede Änderung ist eine Transaktion — Änderungen am Text davor und die
+Jede Bewegung der Cursor sendet `dsk:selection` (`detail.selection`, für eine Statuszeile). Jede Änderung ist eine Transaktion — Änderungen am Text davor und die
 Cursor danach. Sie landet im Verlauf wie Tippen.
 
 ```ts
@@ -230,7 +230,7 @@ Element seinen Text.
 
 ## Zeilenumbrüche
 
-Ein Text behält den Umbruch, mit dem er kam (`\n` oder `\r\n`, der erste
+`editor.lineBreak` ist der verwendete. Ein Text behält den Umbruch, mit dem er kam (`\n` oder `\r\n`, der erste
 gefundene); eingefügter Text bekommt ihn auch. Helfer: `readText`,
 `writeText`, `detectLineBreak`.
 

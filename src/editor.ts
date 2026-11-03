@@ -120,7 +120,7 @@ export class CodeEditor {
   private config: EditorConfig
   private readonly keys: Map<string, KeyBinding>
   private readonly input: Input
-  private lineBreak: LineBreak
+  private eol: LineBreak
   private lang: string | null = null
   private readOnlyFlag: boolean
   private readonly showNumbers: boolean
@@ -221,7 +221,7 @@ export class CodeEditor {
     this.linesEl.style.tabSize = String(this.config.tabSize)
     this.keys = compileKeymap([...(options.keymap ?? []), ...defaultKeymap])
     const value = options.value ?? ''
-    this.lineBreak = detectLineBreak(value)
+    this.eol = detectLineBreak(value)
     this.editorState = new EditorState(new Doc(value), Selection.single(0), this.config)
     this.highlighting = new Highlighting(
       () => this.editorState.doc,
@@ -255,12 +255,12 @@ export class CodeEditor {
 
   /** The text, with the line breaks it was given with. */
   get value(): string {
-    return this.editorState.doc.toString(this.lineBreak)
+    return this.editorState.doc.toString(this.eol)
   }
 
   /** Replaces the text: the cursor to the start, the undo history cleared. */
   set value(value: string) {
-    this.lineBreak = detectLineBreak(value)
+    this.eol = detectLineBreak(value)
     if (!this.configured.indentUnit)
       this.config = { ...this.config, indentUnit: detectIndent(value) ?? this.config.indentUnit }
     this.completion.close()
@@ -275,6 +275,11 @@ export class CodeEditor {
     this.dom.scrollLeft = 0
     this.draw()
     this.input.sync()
+  }
+
+  /** The text's line break, as it came (`\n` or `\r\n`). */
+  get lineBreak(): LineBreak {
+    return this.eol
   }
 
   /** The text and the cursors. Change them through `dispatch`. */
@@ -543,6 +548,14 @@ export class CodeEditor {
     this.draw()
     if (trs.some((t) => t.scrollIntoView)) this.scrollToCursor()
     if (!fromInput) this.input.sync()
+    // The cursors moved (or the text under them changed): `dsk:selection`, for a status line.
+    if (trs.some((t) => t.docChanged || !t.selection.eq(t.selectionBefore)))
+      this.dom.dispatchEvent(
+        new CustomEvent('dsk:selection', {
+          bubbles: true,
+          detail: { selection: this.selection },
+        }),
+      )
     if (trs.some((t) => t.docChanged)) {
       this.onChange?.(this)
       const value = (): string => this.value

@@ -84,3 +84,23 @@ test('EditContext where the browser has it', async ({ page, browserName }) => {
     browserName === 'chromium' ? 'editcontext' : 'textarea',
   )
 })
+
+test('the line break as it came; dsk:selection as the cursors move', async ({ page }) => {
+  await page.goto('/tests/browser/page.html')
+  await page.waitForFunction(() => (window as unknown as { ready: boolean }).ready)
+  const got = await page.evaluate(async () => {
+    const w = window as unknown as {
+      make(o: object): void
+      ed: { lineBreak: string; dom: HTMLElement; setSelection(n: number): void }
+    }
+    w.make({ value: 'a\r\nb' })
+    const moved = new Promise<number>((resolve) =>
+      w.ed.dom.addEventListener('dsk:selection', (e) =>
+        resolve((e as CustomEvent).detail.selection[0].head),
+      ),
+    )
+    w.ed.setSelection(2)
+    return { lineBreak: w.ed.lineBreak, head: await moved }
+  })
+  expect(got).toEqual({ lineBreak: '\r\n', head: 2 })
+})

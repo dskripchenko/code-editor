@@ -198,12 +198,12 @@ defineCodeEditor() // <dsk-code-editor>；defineCodeEditor('my-editor') 使用�
 ```
 
 文本从元素内的 `<script type="text/plain">` 读取，其中任何内容都不会被当作标记；
-`value` 属性用于读取和替换文本，`readonly` 使其只读。每次修改都会发送 `dsk:change`，
+`value` 属性用于读取和替换文本，`readonly` 使其只读。光标每次移动都会发送 `dsk:selection`（其 `detail.selection`，供状态栏使用）。每次修改都会发送 `dsk:change`，
 `detail.source` 为文本。元素在页面中移动时保留其文本。
 
 ## 换行符
 
-文本保留传入时的换行符（`\n` 或 `\r\n`，以首次出现的为准）；粘贴的文本也使用它。
+`editor.lineBreak` 是当前使用的换行符。文本保留传入时的换行符（`\n` 或 `\r\n`，以首次出现的为准）；粘贴的文本也使用它。
 辅助函数：`readText`、`writeText`、`detectLineBreak`。
 
 ## 大文件
