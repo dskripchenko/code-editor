@@ -7,7 +7,7 @@
 import * as c from './commands'
 import type { Command } from './commands'
 
-export type KeyAction = Command | 'undo' | 'redo' | 'copy' | 'cut' | 'paste'
+export type KeyAction = Command | 'undo' | 'redo' | 'copy' | 'cut' | 'paste' | 'fold' | 'unfold'
 
 export interface KeyBinding {
   readonly key: string
@@ -48,6 +48,20 @@ export function normalizeKey(name: string, mac: boolean): string {
   return [...MODIFIERS.filter((m) => mods.has(m)), key].join('-')
 }
 
+const PUNCTUATION: Record<string, string> = {
+  BracketLeft: '[',
+  BracketRight: ']',
+  Slash: '/',
+  Backslash: '\\',
+  Minus: '-',
+  Equal: '=',
+  Comma: ',',
+  Period: '.',
+  Semicolon: ';',
+  Quote: "'",
+  Backquote: '`',
+}
+
 /** A key event's name, as `normalizeKey` writes bindings. */
 export function keyName(
   event: Pick<KeyboardEvent, 'key' | 'code' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>,
@@ -60,6 +74,9 @@ export function keyName(
       const m = /^Key([A-Z])$/.exec(event.code) ?? /^Digit(\d)$/.exec(event.code)
       if (m) key = m[1]!.toLowerCase()
     }
+    // A shortcut on a punctuation key: the key itself, whatever Shift, Alt or the layout make of it.
+    if ((event.ctrlKey || event.metaKey || event.altKey) && PUNCTUATION[event.code])
+      key = PUNCTUATION[event.code]!
   }
   const mods: string[] = []
   if (event.altKey) mods.push('Alt')
@@ -131,6 +148,8 @@ export const defaultKeymap: readonly KeyBinding[] = [
   { key: 'Mod-z', run: 'undo' },
   { key: 'Mod-Shift-z', run: 'redo' },
   { key: 'Mod-y', mac: '', run: 'redo' },
+  { key: 'Ctrl-Shift-[', mac: 'Meta-Alt-[', run: 'fold', readOnly: true },
+  { key: 'Ctrl-Shift-]', mac: 'Meta-Alt-]', run: 'unfold', readOnly: true },
 ]
 
 /** Bindings by their normalized name, for the platform. */

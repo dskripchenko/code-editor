@@ -17,6 +17,9 @@ export default defineConfig({
       formats: ['es', 'cjs'],
       fileName: (format, entryAlias) => `${entryAlias}.${format === 'es' ? 'mjs' : 'cjs'}`,
     },
+    rollupOptions: {
+      external: ['@dskripchenko/syntax'],
+    },
     minify: false,
     sourcemap: true,
   },

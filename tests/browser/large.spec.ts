@@ -102,3 +102,38 @@ test('scrolling draws the lines in view, numbers beside them', async ({ page }) 
     .textContent()
   expect(first).toBe(`row ${number}`)
 })
+
+test('highlighted, 100 000 lines: a key in the middle costs well under a frame', async ({
+  page,
+}) => {
+  test.setTimeout(60_000)
+  const ms = await page.evaluate(async () => {
+    const w = window as unknown as {
+      make(o: object): void
+      ed: {
+        dispatch(s: object): void
+        state: { selection: { main: { head: number } }; doc: { lineStart(i: number): number } }
+        setSelection(n: number): void
+      }
+      api: { Selection: { single(n: number): object } }
+    }
+    const text = Array.from(
+      { length: 100_000 },
+      (_, i) => `  const value${i} = compute("text ${i}", ${i}) // a note`,
+    ).join('\n')
+    w.make({ value: text, language: 'javascript' })
+    const middle = w.ed.state.doc.lineStart(50_000) + 10
+    w.ed.setSelection(middle)
+    const start = performance.now()
+    for (let i = 0; i < 50; i++) {
+      const pos = w.ed.state.selection.main.head
+      w.ed.dispatch({
+        changes: { from: pos, to: pos, insert: i % 10 === 0 ? '"' : 'a' },
+        selection: w.api.Selection.single(pos + 1),
+        userEvent: 'input.type',
+      })
+    }
+    return (performance.now() - start) / 50
+  })
+  expect(ms).toBeLessThan(16)
+})
