@@ -1,6 +1,6 @@
 {
   "name": "@dskripchenko/code-editor",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A code editor for the browser with no framework: a text model with transactions, input through EditContext, only the visible lines drawn, highlighting by @dskripchenko/syntax",
   "keywords": [
     "code-editor",
