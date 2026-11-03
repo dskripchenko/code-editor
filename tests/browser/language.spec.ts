@@ -5,6 +5,8 @@ type W = Window & {
   api: { CodeEditor: new (el: Element, o: object) => unknown }
   ed: {
     destroy(): void
+    focus(): void
+    setSelection(anchor: number, head?: number): void
     value: string
     menu(items: object[]): Promise<number | null>
     prompt(from: number, to: number): Promise<string | null>
@@ -92,6 +94,25 @@ test('Cmd/Ctrl+click is the page’s; a snippet completion selects its first pla
   ])
 })
 
+test('a completion picked with a click: the cursor stays on its place, not where the click was', async ({
+  page,
+}) => {
+  await setup(page, 'abc def\n\nlast line')
+  await page.evaluate(() => {
+    const ed = (window as unknown as W).ed
+    ed.focus()
+    ed.setSelection(7)
+  })
+  await page.keyboard.type(' lo')
+  const item = page.locator('#host .dsk-code-editor__completion-item', { hasText: 'log' })
+  await expect(item).toBeVisible()
+  await item.click()
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as W).ed.value))
+    .toBe('abc def log(message)\n\nlast line')
+  expect(await selection(page)).toEqual([{ anchor: 12, head: 19 }])
+})
+
 test('a menu at the cursor and a field over a word, for the page', async ({ page }) => {
   await setup(page, 'rename me')
   await focus(page)
@@ -108,4 +129,49 @@ test('a menu at the cursor and a field over a word, for the page', async ({ page
   await field.fill('renamed')
   await field.press('Enter')
   expect(await typed).toBe('renamed')
+})
+
+test('made outside the page, then shown: its lines measured, a point is the line under it', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const w = window as unknown as W
+    w.ed?.destroy()
+    const style = document.createElement('style')
+    style.id = 'late-style'
+    style.textContent = '#late .dsk-code-editor { --dsk-code-editor-line-height: 27px; }'
+    document.head.append(style)
+    const box = document.createElement('div')
+    box.id = 'late'
+    box.style.height = '300px'
+    w.ed = new w.api.CodeEditor(box, {
+      value: Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n'),
+    }) as W['ed']
+    document.body.append(box)
+  })
+  // The line under a point, at whatever height the lines are now.
+  const check = async (height: number) => {
+    const target = page.locator('#late .dsk-code-editor__line', { hasText: /^line 40$/ })
+    await page.evaluate(() => (window as unknown as { ed: { goToLine(n: number): void } }).ed.goToLine(40))
+    await expect(target).toBeVisible()
+    await expect.poll(async () => (await target.boundingBox())!.height).toBe(height)
+    const box = (await target.boundingBox())!
+    const pos = await page.evaluate(
+      ([x, y]) =>
+        (window as unknown as { ed: { posAtPoint(x: number, y: number): number } }).ed.posAtPoint(
+          x!,
+          y!,
+        ),
+      [box.x + 20, box.y + box.height / 2],
+    )
+    const value = await page.evaluate(() => (window as unknown as W).ed.value)
+    expect(value.slice(0, pos).split('\n').length).toBe(40)
+  }
+  await check(27)
+  // The page changes the line height later (another mode, a setting).
+  await page.evaluate(() => {
+    document.getElementById('late-style')!.textContent =
+      '#late .dsk-code-editor { --dsk-code-editor-line-height: 31px; }'
+  })
+  await check(31)
 })

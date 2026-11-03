@@ -211,6 +211,8 @@ dsk-code-editor { display: block; }
 .dsk-code-editor__content { position: relative; flex: 1 0 auto; cursor: text; outline: none; }
 .dsk-code-editor__lines { position: absolute; top: 0; left: 4px; white-space: pre; z-index: 1; }
 .dsk-code-editor__line { height: var(--dsk-code-editor-line-height); }
+/* A hidden line of a hundred characters: its size is the editor's line height and character width. */
+.dsk-code-editor__ruler { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; white-space: pre; height: var(--dsk-code-editor-line-height); }
 .dsk-code-editor__selections, .dsk-code-editor__cursors { position: absolute; inset: 0; pointer-events: none; }
 .dsk-code-editor__cursors { z-index: 2; }
 .dsk-code-editor__selection { position: absolute; background: var(--dsk-code-editor-selection); }

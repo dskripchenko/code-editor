@@ -199,6 +199,8 @@ export class CodeEditor {
     timer: number
   } | null = null
   private readonly resize: ResizeObserver | null
+  /** What the lines and characters measure (see `measure`). */
+  private readonly ruler: HTMLElement
   private readonly cleanup: (() => void)[] = []
 
   constructor(parent: HTMLElement, options: CodeEditorOptions = {}) {
@@ -220,7 +222,12 @@ export class CodeEditor {
     this.linesEl = el('div', 'dsk-code-editor__lines')
     this.selectionsEl = el('div', 'dsk-code-editor__selections')
     this.cursorsEl = el('div', 'dsk-code-editor__cursors')
-    this.content.append(this.selectionsEl, this.linesEl, this.cursorsEl)
+    this.ruler = el('div', 'dsk-code-editor__ruler')
+    this.ruler.setAttribute('aria-hidden', 'true')
+    const sample = this.ruler.ownerDocument.createElement('span')
+    sample.textContent = 'x'.repeat(100)
+    this.ruler.append(sample)
+    this.content.append(this.selectionsEl, this.linesEl, this.cursorsEl, this.ruler)
     this.sizer.append(this.gutter, this.content)
     this.dom.append(this.sizer)
     parent.append(this.dom)
@@ -284,8 +291,18 @@ export class CodeEditor {
     const fonts = doc.fonts as FontFaceSet | undefined
     if (fonts) this.on(fonts, 'loadingdone', () => this.remeasure())
     this.resize =
-      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => this.schedule())
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => {
+            // Made outside the page (or hidden), or its line height or font changed (the ruler's
+            // size did): measured again, the lines drawn at their new places.
+            const before = [this.lineHeight, this.charWidth]
+            this.measure()
+            if (this.lineHeight !== before[0] || this.charWidth !== before[1]) this.drawn.version = -1
+            this.schedule()
+          })
     this.resize?.observe(this.dom)
+    this.resize?.observe(this.ruler)
     this.draw()
   }
 
@@ -678,8 +695,11 @@ export class CodeEditor {
       )
     }
     // The text or the cursor moved: the tooltips go (the parameters' follow the cursor within its call).
-    if (this.hoverTip.open) this.hoverTip.close()
+    // Other transactions (marks, diagnostics) leave them.
+    const moved = trs.some((t) => t.docChanged || !t.selection.eq(t.selectionBefore))
+    if (moved && this.hoverTip.open) this.hoverTip.close()
     if (
+      moved &&
       this.signatureTip.open &&
       !trs.every((t) => t.userEvent === 'input.type' || t.userEvent === 'delete.backward')
     )
@@ -1090,17 +1110,8 @@ export class CodeEditor {
   // Measuring ----------------------------------------------------------------
 
   private measure(): void {
-    const doc = this.dom.ownerDocument
-    const probe = doc.createElement('div')
-    probe.className = 'dsk-code-editor__line'
-    probe.style.cssText = 'position:absolute;visibility:hidden'
-    const span = doc.createElement('span')
-    span.textContent = 'x'.repeat(100)
-    probe.append(span)
-    this.linesEl.append(probe)
-    const width = span.getBoundingClientRect().width / 100
-    const height = probe.getBoundingClientRect().height
-    probe.remove()
+    const width = this.ruler.firstElementChild!.getBoundingClientRect().width / 100
+    const height = this.ruler.getBoundingClientRect().height
     if (width > 0) this.charWidth = width
     if (height > 0) this.lineHeight = height
   }
@@ -1682,6 +1693,8 @@ export class CodeEditor {
 
   private onMouseDown(event: MouseEvent): void {
     if (event.button !== 0) return
+    // In a tooltip or a field over the text: theirs (text to select, a name to type).
+    if ((event.target as Element).closest?.('.dsk-code-editor__tooltip, .dsk-code-editor__prompt')) return
     event.preventDefault()
     this.input.focus()
     const pos = this.posAtCoords(event.clientX, event.clientY)

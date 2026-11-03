@@ -112,6 +112,7 @@ export function openMenu(
     const onDown = (e: MouseEvent) => {
       const row = (e.target as Element).closest?.('[data-index]') as HTMLElement | null
       e.preventDefault()
+      e.stopPropagation()
       if (row && box.contains(row)) done(Number(row.dataset.index))
       else done(null)
     }
