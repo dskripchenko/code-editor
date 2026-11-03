@@ -36,6 +36,25 @@ export interface Transaction {
   readonly docChanged: boolean
   /** The lines it changed: lines `from` to `oldEnd` (excluded) of the text before are lines `from` to `newEnd` now. */
   readonly lines: LineChange | null
+  /**
+   * The changes as line and character (UTF-16) ranges of the text before,
+   * the last one first: applied in this order, each range stays right (as a
+   * language server's incremental sync wants them).
+   */
+  readonly edits: readonly PositionEdit[]
+}
+
+export interface Position {
+  /** 0-based. */
+  readonly line: number
+  /** UTF-16 units from the line's start. */
+  readonly character: number
+}
+
+export interface PositionEdit {
+  readonly from: Position
+  readonly to: Position
+  readonly text: string
 }
 
 export interface LineChange {
@@ -87,6 +106,13 @@ export class EditorState {
     const inverse = changes.invert(this.doc)
     const selectionBefore = this.selection
     let lines: LineChange | null = null
+    const at = (offset: number): Position => {
+      const line = this.doc.lineAt(offset)
+      return { line: line.index, character: offset - line.from }
+    }
+    const edits: PositionEdit[] = [...changes.changes]
+      .reverse()
+      .map((c) => ({ from: at(c.from), to: at(c.to), text: c.insert }))
     if (!changes.empty) {
       const list = changes.changes
       const from = this.doc.lineAt(list[0]!.from).index
@@ -106,6 +132,7 @@ export class EditorState {
       addToHistory: spec.addToHistory ?? !changes.empty,
       docChanged: !changes.empty,
       lines,
+      edits,
     }
   }
 }

@@ -162,6 +162,33 @@ dsk-code-editor { display: block; }
 .dsk-code-editor__completion-item { display: flex; gap: 12px; padding: 0 8px; cursor: pointer; white-space: pre; }
 .dsk-code-editor__completion-item--active { background: var(--dsk-code-editor-popup-active); }
 .dsk-code-editor__completion-detail { margin-left: auto; color: var(--dsk-code-editor-gutter-fg); overflow: hidden; text-overflow: ellipsis; }
+.dsk-code-editor__tooltip {
+  position: absolute;
+  z-index: 6;
+  max-width: 560px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px 10px;
+  background: var(--dsk-code-editor-popup-bg);
+  border: 1px solid var(--dsk-code-editor-popup-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+  white-space: pre-wrap;
+  font-family: inherit;
+  cursor: auto;
+}
+.dsk-code-editor__prompt {
+  position: absolute;
+  z-index: 7;
+  box-sizing: border-box;
+  padding: 0 4px;
+  font: inherit;
+  color: inherit;
+  background: var(--dsk-code-editor-popup-bg);
+  border: 1px solid var(--dsk-code-editor-cursor);
+  border-radius: 3px;
+  outline: none;
+}
 .dsk-code-editor__panel { position: sticky; top: 0; left: 0; z-index: 7; height: 0; }
 .dsk-code-editor__panel-input {
   position: absolute;
@@ -184,6 +211,8 @@ dsk-code-editor { display: block; }
 .dsk-code-editor__content { position: relative; flex: 1 0 auto; cursor: text; outline: none; }
 .dsk-code-editor__lines { position: absolute; top: 0; left: 4px; white-space: pre; z-index: 1; }
 .dsk-code-editor__line { height: var(--dsk-code-editor-line-height); }
+/* A hidden line of a hundred characters: its size is the editor's line height and character width. */
+.dsk-code-editor__ruler { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; white-space: pre; height: var(--dsk-code-editor-line-height); }
 .dsk-code-editor__selections, .dsk-code-editor__cursors { position: absolute; inset: 0; pointer-events: none; }
 .dsk-code-editor__cursors { z-index: 2; }
 .dsk-code-editor__selection { position: absolute; background: var(--dsk-code-editor-selection); }

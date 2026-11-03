@@ -11,6 +11,8 @@ export {
   composeLines,
   type EditorConfig,
   type LineChange,
+  type Position,
+  type PositionEdit,
   type Transaction,
   type TransactionSpec,
 } from './state/state'
@@ -38,3 +40,4 @@ export {
   type EditorConfigSettings,
 } from './editorconfig'
 export type { CompletionItem, CompletionContext, CompletionSource } from './view/completion'
+export { expandSnippet, type MenuItem, type PopupContent } from './view/popups'

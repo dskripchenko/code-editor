@@ -205,6 +205,31 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 The ranges move with edits until the next check replaces them. Folding and
 the check read the whole text; above 2 MB neither runs.
 
+## Hover, parameters, definitions, menus
+
+What a language knows comes from the page (a language server, say); the editor
+shows it:
+
+```ts
+new CodeEditor(el, {
+  hover: async ({ pos }) => describe(pos), // a string or an element; null for nothing
+  signatureHelp: async ({ pos, explicit }) => parametersAt(pos), // after ( and , — and Mod+Shift+Space
+  onModClick: (pos) => (goToDefinition(pos), true), // Cmd (macOS) or Ctrl with a click
+  completion: async () => [{ label: 'log', snippet: 'log(${1:message})$0' }], // places, the first selected
+})
+editor.menu([{ label: 'Add import' }, { label: 'Extract', detail: 'function' }]) // the index chosen, or null
+editor.prompt(from, to) // a field over a word (a new name): what was typed, or null
+editor.coordsAt(pos) // a position's box on the screen; posAtPoint(x, y) the other way
+editor.showTooltip(content, pos) // the page's own tooltip; closeTooltip()
+```
+
+A resting pointer shows the hover after a moment; a tooltip goes when the text
+or the cursor moves, or with Escape. A completion item may replace a range of
+its own (`from`, `to`). Every `dsk:change` carries `edits` — the changes as
+line and character (UTF-16) ranges, each against the text the one before left
+(a language server's incremental sync); a transaction's are in
+`transaction.edits`.
+
 ## Marks and annotations in the gutter
 
 ```ts

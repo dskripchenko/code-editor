@@ -33,7 +33,15 @@ import {
   type CompletionSource,
 } from './view/completion'
 import { GoToLine } from './view/panel'
-import { compileKeymap, defaultKeymap, keyName, type KeyBinding } from './keymap'
+import {
+  expandSnippet,
+  openMenu,
+  openPrompt,
+  Tooltip,
+  type MenuItem,
+  type PopupContent,
+} from './view/popups'
+import { compileKeymap, defaultKeymap, isMac, keyName, type KeyBinding } from './keymap'
 import { Doc } from './state/doc'
 import { History } from './state/history'
 import { Selection, SelectionRange } from './state/selection'
@@ -81,6 +89,19 @@ export interface CodeEditorOptions {
   completion?: CompletionSource
   /** The words of the text offered as completions (on by default). */
   completeWords?: boolean
+  /** What is under the pointer resting on the text (a name's type, its documentation); null for nothing. */
+  hover?: (context: {
+    state: EditorState
+    pos: number
+  }) => PopupContent | null | Promise<PopupContent | null>
+  /** A call's parameters, after `(` and `,` (and Mod+Shift+Space); null for none. */
+  signatureHelp?: (context: {
+    state: EditorState
+    pos: number
+    explicit: boolean
+  }) => PopupContent | null | Promise<PopupContent | null>
+  /** A click with Cmd (macOS) or Ctrl: the page's (going to a definition); true when it took it. */
+  onModClick?: (pos: number) => boolean
 }
 
 /** Lines drawn above and below the view, so a scroll does not show them blank. */
@@ -155,6 +176,14 @@ export class CodeEditor {
   private readonly completion: CompletionList
   private completionRequest = 0
   private readonly goToLinePanel: GoToLine
+  private readonly hoverTip: Tooltip
+  private readonly signatureTip: Tooltip
+  private readonly hoverSource?: CodeEditorOptions['hover']
+  private readonly signatureSource?: CodeEditorOptions['signatureHelp']
+  private readonly onModClick?: CodeEditorOptions['onModClick']
+  private hoverTimer = 0
+  private hoverAt = -1
+  private popupRequest = 0
   private query: SearchQuery | null = null
   private pattern: RegExp | null = null
   /** The text of the last copy of whole lines (no selection): pasted, it goes above the line. */
@@ -170,6 +199,8 @@ export class CodeEditor {
     timer: number
   } | null = null
   private readonly resize: ResizeObserver | null
+  /** What the lines and characters measure (see `measure`). */
+  private readonly ruler: HTMLElement
   private readonly cleanup: (() => void)[] = []
 
   constructor(parent: HTMLElement, options: CodeEditorOptions = {}) {
@@ -191,12 +222,22 @@ export class CodeEditor {
     this.linesEl = el('div', 'dsk-code-editor__lines')
     this.selectionsEl = el('div', 'dsk-code-editor__selections')
     this.cursorsEl = el('div', 'dsk-code-editor__cursors')
-    this.content.append(this.selectionsEl, this.linesEl, this.cursorsEl)
+    this.ruler = el('div', 'dsk-code-editor__ruler')
+    this.ruler.setAttribute('aria-hidden', 'true')
+    const sample = this.ruler.ownerDocument.createElement('span')
+    sample.textContent = 'x'.repeat(100)
+    this.ruler.append(sample)
+    this.content.append(this.selectionsEl, this.linesEl, this.cursorsEl, this.ruler)
     this.sizer.append(this.gutter, this.content)
     this.dom.append(this.sizer)
     parent.append(this.dom)
     ensureStyle(this.dom)
     this.completion = new CompletionList(this.content, (item) => this.acceptCompletion(item))
+    this.hoverTip = new Tooltip(this.content, 'dsk-code-editor__hover')
+    this.signatureTip = new Tooltip(this.content, 'dsk-code-editor__signature')
+    this.hoverSource = options.hover
+    this.signatureSource = options.signatureHelp
+    this.onModClick = options.onModClick
     this.goToLinePanel = new GoToLine(
       this.dom,
       (line, column) => this.goToLine(line, column),
@@ -244,12 +285,24 @@ export class CodeEditor {
     this.measure()
     this.on(this.dom, 'scroll', () => this.schedule())
     this.on(this.content, 'mousedown', (e) => this.onMouseDown(e as MouseEvent))
+    this.on(this.content, 'mousemove', (e) => this.onHoverMove(e as MouseEvent))
+    this.on(this.content, 'mouseleave', () => this.hoverLater(null))
     this.on(this.gutter, 'mousedown', (e) => this.onGutterDown(e as MouseEvent))
     const fonts = doc.fonts as FontFaceSet | undefined
     if (fonts) this.on(fonts, 'loadingdone', () => this.remeasure())
     this.resize =
-      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => this.schedule())
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => {
+            // Made outside the page (or hidden), or its line height or font changed (the ruler's
+            // size did): measured again, the lines drawn at their new places.
+            const before = [this.lineHeight, this.charWidth]
+            this.measure()
+            if (this.lineHeight !== before[0] || this.charWidth !== before[1]) this.drawn.version = -1
+            this.schedule()
+          })
     this.resize?.observe(this.dom)
+    this.resize?.observe(this.ruler)
     this.draw()
   }
 
@@ -517,11 +570,57 @@ export class CodeEditor {
     if (this.folding.unfoldAll()) this.marksChanged()
   }
 
+  /** A position's box on the screen (a character's, or a cursor's width at a line's end). */
+  coordsAt(pos: number): DOMRect {
+    return this.charRect(Math.max(0, Math.min(this.editorState.doc.length, pos)))
+  }
+
+  /** The position at a point on the screen. */
+  posAtPoint(clientX: number, clientY: number): number {
+    return this.posAtCoords(clientX, clientY)
+  }
+
+  /** The page's own tooltip by a position (above it when there is room); `closeTooltip` takes it away. */
+  showTooltip(content: PopupContent, pos: number): void {
+    this.hoverTip.show(content, this.localAt(pos), true)
+  }
+
+  closeTooltip(): void {
+    this.hoverTip.close()
+  }
+
+  /** A list at a position (the cursor by default); the index chosen, or null. */
+  menu(
+    items: readonly MenuItem[],
+    pos = this.editorState.selection.main.head,
+  ): Promise<number | null> {
+    const at = this.localAt(pos)
+    return openMenu(this.content, items, { left: at.left, top: at.bottom + 2 }).finally(() =>
+      this.focus(),
+    )
+  }
+
+  /** A field over a range of the text (a word to rename), holding `value`; what was typed, or null. */
+  prompt(
+    from: number,
+    to: number,
+    value = this.editorState.doc.slice(from, to),
+  ): Promise<string | null> {
+    const at = this.localAt(from)
+    void to
+    return openPrompt(this.content, value, {
+      left: at.left - 2,
+      top: at.top,
+      height: this.lineHeight,
+    }).finally(() => this.focus())
+  }
+
   /** Takes the editor off the page. */
   destroy(): void {
     cancelAnimationFrame(this.frame)
     this.highlighting.destroy()
     clearTimeout(this.analyzeTimer)
+    clearTimeout(this.hoverTimer)
     this.completionRequest++
     this.stopDrag()
     this.resize?.disconnect()
@@ -581,6 +680,7 @@ export class CodeEditor {
     if (trs.some((t) => t.docChanged)) {
       this.onChange?.(this)
       const value = (): string => this.value
+      const edits = trs.flatMap((t) => t.edits)
       this.dom.dispatchEvent(
         new CustomEvent('dsk:change', {
           bubbles: true,
@@ -588,10 +688,22 @@ export class CodeEditor {
             get source() {
               return value()
             },
+            // The changes as line and character ranges, in order (each against the text the one before left).
+            edits,
           },
         }),
       )
     }
+    // The text or the cursor moved: the tooltips go (the parameters' follow the cursor within its call).
+    // Other transactions (marks, diagnostics) leave them.
+    const moved = trs.some((t) => t.docChanged || !t.selection.eq(t.selectionBefore))
+    if (moved && this.hoverTip.open) this.hoverTip.close()
+    if (
+      moved &&
+      this.signatureTip.open &&
+      !trs.every((t) => t.userEvent === 'input.type' || t.userEvent === 'delete.backward')
+    )
+      this.signatureTip.close()
   }
 
   private host(): InputHost {
@@ -632,6 +744,13 @@ export class CodeEditor {
       event.preventDefault()
       return true
     }
+    // Escape takes a tooltip away first.
+    if (event.key === 'Escape' && (this.hoverTip.open || this.signatureTip.open)) {
+      this.hoverTip.close()
+      this.signatureTip.close()
+      event.preventDefault()
+      return true
+    }
     const binding = this.keys.get(keyName(event))
     if (!binding) return false
     const run = binding.run
@@ -650,6 +769,9 @@ export class CodeEditor {
       this.find(run === 'findPrevious')
     } else if (run === 'complete') {
       void this.complete(true)
+    } else if (run === 'signatureHelp') {
+      if (!this.signatureSource) return false
+      void this.signature(true)
     } else if (run === 'jumpToBracket') {
       const pair = this.bracketPair()
       if (!pair) return false
@@ -733,6 +855,10 @@ export class CodeEditor {
     if (/^[\p{L}\p{N}_$]$/u.test(text) || (this.completion.open && text === '.'))
       void this.complete(false)
     else if (this.completion.open) this.completion.close()
+    // A call's parameters: shown after its `(` and `,`, gone after its `)`.
+    if (this.signatureSource && (text === '(' || text === ',')) void this.signature(false)
+    else if (text === ')') this.signatureTip.close()
+    else if (this.signatureTip.open) void this.signature(false)
   }
 
   // Completion -----------------------------------------------------------------
@@ -808,6 +934,22 @@ export class CodeEditor {
     this.completion.close()
     if (!context || this.readOnlyFlag) return
     const state = this.editorState
+    // A range of its own, or a snippet: at the main cursor, its first place selected.
+    if (item.snippet !== undefined || item.from !== undefined) {
+      const head = state.selection.main.head
+      const from = item.from ?? head - context.prefix.length
+      const to = Math.max(item.to ?? head, head)
+      const expanded = item.snippet !== undefined ? expandSnippet(item.snippet) : null
+      const text = expanded ? expanded.text : (item.insert ?? item.label)
+      this.dispatch({
+        changes: { from, to, insert: text },
+        selection: expanded
+          ? Selection.single(from + expanded.select[0], from + expanded.select[1])
+          : Selection.single(from + text.length),
+        userEvent: 'input.complete',
+      })
+      return
+    }
     const insert = item.insert ?? item.label
     // At every cursor whose word before it is the same prefix.
     const changes = state.selection.ranges
@@ -815,6 +957,60 @@ export class CodeEditor {
       .map((r) => ({ from: r.head - context.prefix.length, to: r.head, insert }))
     if (changes.length === 0) return
     this.dispatch({ changes, userEvent: 'input.complete' })
+  }
+
+  // Tooltips -------------------------------------------------------------------
+
+  /** A position's place in the content's pixels: its left, its line's top and bottom. */
+  private localAt(pos: number): { left: number; top: number; bottom: number } {
+    const line = this.editorState.doc.lineAt(pos)
+    const top = this.lineTop(line.index)
+    return { left: PAD + this.xAt(line.index, pos - line.from), top, bottom: top + this.lineHeight }
+  }
+
+  private onHoverMove(event: MouseEvent): void {
+    if (!this.hoverSource || event.buttons !== 0) return
+    // Over a tooltip itself: it stays.
+    if ((event.target as Element).closest?.('.dsk-code-editor__tooltip')) return
+    const pos = this.posAtCoords(event.clientX, event.clientY)
+    const line = this.editorState.doc.lineAt(pos)
+    // Past a line's end there is nothing to tell.
+    const end =
+      this.content.getBoundingClientRect().left + PAD + this.xAt(line.index, line.text.length)
+    this.hoverLater(event.clientX > end ? null : pos)
+  }
+
+  /** The pointer rests at a position (null: off the text): the tooltip for it after a moment. */
+  private hoverLater(pos: number | null): void {
+    clearTimeout(this.hoverTimer)
+    if (pos === null) {
+      this.hoverAt = -1
+      this.hoverTimer = setTimeout(() => this.hoverTip.close(), 300) as unknown as number
+      return
+    }
+    const [from, to] = wordAroundRange(this.editorState, pos)
+    // Over the same word: what is shown stays.
+    if (this.hoverTip.open && this.hoverAt >= from && this.hoverAt <= to) return
+    this.hoverTimer = setTimeout(() => void this.hover(pos), 450) as unknown as number
+  }
+
+  private async hover(pos: number): Promise<void> {
+    const request = ++this.popupRequest
+    const content = await this.hoverSource?.({ state: this.editorState, pos })
+    if (request !== this.popupRequest) return
+    if (!content) return this.hoverTip.close()
+    this.hoverAt = pos
+    const [from] = wordAroundRange(this.editorState, pos)
+    this.hoverTip.show(content, this.localAt(from), true)
+  }
+
+  private async signature(explicit: boolean): Promise<void> {
+    const pos = this.editorState.selection.main.head
+    const request = ++this.popupRequest
+    const content = await this.signatureSource?.({ state: this.editorState, pos, explicit })
+    if (request !== this.popupRequest || this.editorState.selection.main.head !== pos) return
+    if (!content) return this.signatureTip.close()
+    this.signatureTip.show(content, this.localAt(pos), true)
   }
 
   // Search ---------------------------------------------------------------------
@@ -914,17 +1110,8 @@ export class CodeEditor {
   // Measuring ----------------------------------------------------------------
 
   private measure(): void {
-    const doc = this.dom.ownerDocument
-    const probe = doc.createElement('div')
-    probe.className = 'dsk-code-editor__line'
-    probe.style.cssText = 'position:absolute;visibility:hidden'
-    const span = doc.createElement('span')
-    span.textContent = 'x'.repeat(100)
-    probe.append(span)
-    this.linesEl.append(probe)
-    const width = span.getBoundingClientRect().width / 100
-    const height = probe.getBoundingClientRect().height
-    probe.remove()
+    const width = this.ruler.firstElementChild!.getBoundingClientRect().width / 100
+    const height = this.ruler.getBoundingClientRect().height
     if (width > 0) this.charWidth = width
     if (height > 0) this.lineHeight = height
   }
@@ -1506,9 +1693,20 @@ export class CodeEditor {
 
   private onMouseDown(event: MouseEvent): void {
     if (event.button !== 0) return
+    // In a tooltip or a field over the text: theirs (text to select, a name to type).
+    if ((event.target as Element).closest?.('.dsk-code-editor__tooltip, .dsk-code-editor__prompt')) return
     event.preventDefault()
     this.input.focus()
     const pos = this.posAtCoords(event.clientX, event.clientY)
+    // Cmd (macOS) or Ctrl with a click: the page's (going to a definition).
+    if ((isMac() ? event.metaKey : event.ctrlKey) && this.onModClick?.(pos)) {
+      this.dispatch({
+        selection: Selection.single(pos),
+        userEvent: 'select.pointer',
+        scrollIntoView: false,
+      })
+      return
+    }
     // A click on a folded line's placeholder, past its text: the fold opens.
     const at = this.editorState.doc.lineAt(pos)
     if (this.folding.isFolded(at.index) && pos === at.to) {

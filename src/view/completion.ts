@@ -13,6 +13,11 @@ export interface CompletionItem {
   readonly detail?: string
   /** What it is (`function`, `variable`, `keyword`, `word`…): a class on its row. */
   readonly kind?: string
+  /** Inserted as a snippet: `$1`, `${2:name}` are places, the first selected; `$0` the end. */
+  readonly snippet?: string
+  /** The range it replaces (offsets), when not the word before the cursor. */
+  readonly from?: number
+  readonly to?: number
 }
 
 export interface CompletionContext {
@@ -91,6 +96,8 @@ export class CompletionList {
     // A click picks without taking the focus from the text.
     this.dom.addEventListener('mousedown', (e) => {
       e.preventDefault()
+      // Not on to the text under it: the cursor stays where the item goes.
+      e.stopPropagation()
       const row = (e.target as Element).closest('[data-index]') as HTMLElement | null
       if (row) this.pick(this.items[Number(row.dataset.index)]!)
     })
