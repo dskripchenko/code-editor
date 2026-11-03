@@ -8,12 +8,12 @@ A code editor for the browser — **no framework**, **no dependencies** beyond
 [`@dskripchenko/syntax`](https://github.com/dskripchenko/syntax) for
 highlighting. A class on an element, or a `<dsk-code-editor>` element.
 
-> **Status: 0.0.x — editing, highlighting, folding, checks.** Typing (IME
-> included), moving and selecting by keys and pointer, undo and redo, the
-> clipboard, files of a million lines; highlighting as you type, folding,
-> data formats checked while editing. The editing commands people expect
-> come in 0.1.0; the plan is in
-> [docs/internal/adr-001-code-editor.md](docs/internal/adr-001-code-editor.md).
+> **Status: 0.1.0.** Typing (IME included), moving and selecting by keys and
+> pointer, undo and redo, the clipboard, files of a million lines;
+> highlighting as you type, folding, data formats checked while editing; the
+> editing commands of a code editor — indentation and `.editorconfig`,
+> brackets, comments, lines, several cursors, go to line, search, completion.
+> The plan is in [docs/internal/adr-001-code-editor.md](docs/internal/adr-001-code-editor.md).
 
 ```ts
 import { CodeEditor, defineCodeEditor } from '@dskripchenko/code-editor'
@@ -39,10 +39,10 @@ echo '<b>shown as text</b>';
 </script></dsk-code-editor>
 ```
 
-## What it is going to be
+## What it is
 
-- **A text model with transactions** — every change maps cursors, marks,
-  folds and diagnostics, undo and redo by transaction.
+- **A text model with transactions** — every change maps cursors, folds and
+  diagnostics; undo and redo by transaction.
 - **Input through EditContext** where the browser has it (Chromium), a hidden
   textarea elsewhere — IME, dead keys and the clipboard as the system does
   them; no `contenteditable`.
@@ -50,11 +50,10 @@ echo '<b>shown as text</b>';
   ones.
 - **Highlighting as you type** — incremental, by `@dskripchenko/syntax`;
   folding and checks live while editing.
-- **The editing people expect** — indentation and `.editorconfig`, brackets,
-  comments, moving and duplicating lines, several cursors, go to line,
-  search, completion.
-- **Decorations** — gutter marks, underlines and ranges for whatever the page
-  adds on top (diff marks, diagnostics, search matches).
+- **The editing people expect, with VS Code's keys** — indentation and
+  `.editorconfig`, brackets and quotes, comments, moving and copying lines,
+  several cursors, go to line, search and replace (an API for the page's own
+  find bar), completion from the page and from the text.
 
 ## Documentation
 

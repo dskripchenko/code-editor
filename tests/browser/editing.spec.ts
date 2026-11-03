@@ -25,17 +25,20 @@ for (const input of ['auto', 'textarea'] as const) {
     test('typing, Enter with the indent, Backspace and Delete', async ({ page }) => {
       await make(page, { value: '', input })
       await focus(page)
+      // The brace closes itself; Enter between the pair opens an indented line.
       await page.keyboard.type('function f() {')
+      await expectValue(page, 'function f() {}')
       await page.keyboard.press('Enter')
-      await page.keyboard.type('    return 1')
+      await page.keyboard.type('return 1')
       await page.keyboard.press('Enter')
       await page.keyboard.type('x')
-      await expectValue(page, 'function f() {\n    return 1\n    x')
+      await expectValue(page, 'function f() {\n    return 1\n    x\n}')
       await page.keyboard.press('Backspace')
-      // Home on a line of spaces: to its start (the indent is where the cursor already is).
-      await page.keyboard.press('Home')
+      // In the indentation, Backspace goes back a whole step.
+      await page.keyboard.press('Backspace')
+      await expectValue(page, 'function f() {\n    return 1\n\n}')
       await page.keyboard.press('Delete')
-      await expectValue(page, 'function f() {\n    return 1\n   ')
+      await expectValue(page, 'function f() {\n    return 1\n}')
     })
 
     test('the line breaks of the file are kept', async ({ page }) => {

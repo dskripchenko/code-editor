@@ -27,3 +27,13 @@ export {
   type KeyBinding,
   type KeyAction,
 } from './keymap'
+export { languageEditing, type LanguageEditing } from './language'
+export { searchPattern, matchesIn, findFrom, type SearchQuery, type Match } from './search'
+export {
+  parseEditorConfig,
+  editorConfigFor,
+  indentOptions,
+  detectIndent,
+  type EditorConfigSettings,
+} from './editorconfig'
+export type { CompletionItem, CompletionContext, CompletionSource } from './view/completion'
