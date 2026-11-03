@@ -184,6 +184,25 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 
 范围随编辑移动，直到下一次校验替换它们。折叠和校验读取整个文本；超过 2 MB 时两者都不运行。
 
+## 行号栏中的标记与注释
+
+```ts
+// 行旁的标记（从 0 开始），每个来源一组：与上次提交的差异、断点……
+editor.setGutterMarks([{ line: 4, kind: 'added' }, { line: 9, kind: 'modified', title: '已修改' }], 'diff')
+editor.setGutterMarks([], 'diff') // 清除
+el.addEventListener('dsk:gutter-mark', (e) => peek(e.detail.line, e.detail.rect))
+
+// 行号旁的一列短文本（谁在何时修改了这一行）。
+editor.setAnnotations([{ line: 0, text: 'Ann · 2 天', title: 'Ann <ann@example.com>，11 月 1 日' }])
+el.addEventListener('dsk:annotation', (e) => show(e.detail.line))
+editor.setAnnotations(null)
+```
+
+`added`、`modified` 和 `deleted` 会被绘制（竖条、竖条、缺口），颜色为
+`--dsk-code-editor-added`、`-modified`、`-deleted`；其他类型会得到类名
+`dsk-code-editor__mark--<kind>`，由页面自行绘制。编辑文本时标记和注释随行移动；
+被替换的行上的标记会消失，直到页面重新设置。
+
 ## 作为元素
 
 ```ts

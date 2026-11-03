@@ -206,6 +206,26 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 Диапазоны сдвигаются при правке, пока следующая проверка их не заменит.
 Сворачивание и проверка читают весь текст; больше 2 МБ они не работают.
 
+## Метки и подписи на полях
+
+```ts
+// У строк (с нуля), по набору на источник: дифф с последним коммитом, точки останова…
+editor.setGutterMarks([{ line: 4, kind: 'added' }, { line: 9, kind: 'modified', title: 'изменено' }], 'diff')
+editor.setGutterMarks([], 'diff') // убраны
+el.addEventListener('dsk:gutter-mark', (e) => peek(e.detail.line, e.detail.rect))
+
+// Колонка коротких подписей у номеров (кто менял строку и когда).
+editor.setAnnotations([{ line: 0, text: 'Ann · 2 дня', title: 'Ann <ann@example.com>, 1 нояб.' }])
+el.addEventListener('dsk:annotation', (e) => show(e.detail.line))
+editor.setAnnotations(null)
+```
+
+`added`, `modified` и `deleted` рисуются (полоса, полоса, засечка) цветами
+`--dsk-code-editor-added`, `-modified`, `-deleted`; другой вид получает класс
+`dsk-code-editor__mark--<kind>`, чтобы его нарисовала страница. Метки и подписи
+сдвигаются вместе со строками при правке; стоявшие на заменённой строке
+пропадают, пока страница не задаст их снова.
+
 ## Как элемент
 
 ```ts

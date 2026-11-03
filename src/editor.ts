@@ -50,6 +50,7 @@ import { detectLineBreak, type LineBreak } from './text'
 import { columnAt, offsetAt } from './text-measure'
 import { Diagnostics, fromValidation, type Diagnostic } from './view/diagnostics'
 import { Folding, type Fold } from './view/folding'
+import { Gutter, type Annotation, type GutterMark } from './view/gutter'
 import { fillLine, Highlighting } from './view/highlight'
 import { createInput, type Input, type InputHost } from './view/input'
 
@@ -140,6 +141,7 @@ export class CodeEditor {
   }
   private readonly highlighting: Highlighting
   private readonly folding = new Folding()
+  private readonly gutterExtras = new Gutter()
   private readonly diagnosticsModel = new Diagnostics()
   private readonly validating: boolean
   /** Changes when folds or diagnostics do: the lines are drawn again. */
@@ -466,6 +468,25 @@ export class CodeEditor {
     this.toldDiagnostics()
   }
 
+  /**
+   * Marks beside lines, one set per source (a diff against the last commit,
+   * say): `kind` gives the look — `added`, `modified` and `deleted` are drawn.
+   * A click on one sends `dsk:gutter-mark` with the mark. An empty list clears.
+   */
+  setGutterMarks(marks: readonly GutterMark[], source = 'external'): void {
+    this.gutterExtras.setMarks(source, marks)
+    this.marksChanged()
+  }
+
+  /**
+   * A column of short text by the line numbers (who changed a line, and when);
+   * null takes it away. A click on one sends `dsk:annotation` with it.
+   */
+  setAnnotations(list: readonly Annotation[] | null): void {
+    this.gutterExtras.setAnnotations(list)
+    this.marksChanged()
+  }
+
   /** The folded ranges (0-based lines: the first stays in view). */
   get folds(): Fold[] {
     return this.folding.folds
@@ -533,6 +554,7 @@ export class CodeEditor {
     if (lines) {
       this.highlighting.edit(lines)
       this.folding.map(lines)
+      this.gutterExtras.map(lines)
       this.marks++
       this.analyze()
     }
@@ -1074,9 +1096,14 @@ export class CodeEditor {
   private draw(): void {
     const doc = this.editorState.doc
     const count = doc.lineCount
-    this.gutterWidth = this.showNumbers
-      ? Math.ceil(String(count).length * this.charWidth + 20 + FOLD_WIDTH)
+    const annotation = this.gutterExtras.hasAnnotations
+      ? Math.ceil((this.gutterExtras.annotationChars + 2) * this.charWidth)
       : 0
+    this.gutterWidth = this.showNumbers
+      ? Math.ceil(String(count).length * this.charWidth + 20 + FOLD_WIDTH) + annotation
+      : 0
+    this.gutterLines.style.paddingLeft = `${8 + annotation}px`
+    this.gutterLines.style.setProperty('--dsk-code-editor-annotation-width', `${annotation}px`)
     this.gutter.style.width = `${this.gutterWidth}px`
     const rows = this.folding.rowCount(count)
     this.sizer.style.height = `${Math.min(rows * this.lineHeight, MAX_HEIGHT)}px`
@@ -1125,6 +1152,23 @@ export class CodeEditor {
             n.title = mark.messages.join('\n')
           }
           n.append(String(i + 1))
+          const gm = this.gutterExtras.markAt(i)
+          if (gm) {
+            const bar = d.createElement('span')
+            bar.className = `dsk-code-editor__mark dsk-code-editor__mark--${gm.kind}`
+            bar.dataset.line = String(i)
+            if (gm.title) bar.title = gm.title
+            n.append(bar)
+          }
+          const note = this.gutterExtras.annotationAt(i)
+          if (note) {
+            const a = d.createElement('span')
+            a.className = 'dsk-code-editor__annotation'
+            a.dataset.line = String(i)
+            a.textContent = note.text
+            if (note.title) a.title = note.title
+            n.append(a)
+          }
           if (this.folding.availableAt(i)) {
             const m = d.createElement('span')
             m.className = `dsk-code-editor__fold${folded ? ' dsk-code-editor__fold--folded' : ''}`
@@ -1429,6 +1473,25 @@ export class CodeEditor {
   }
 
   private onGutterDown(event: MouseEvent): void {
+    // A mark or an annotation: the page is told, with the box to show something by it.
+    const extra = (event.target as Element).closest?.(
+      '.dsk-code-editor__mark, .dsk-code-editor__annotation',
+    ) as HTMLElement | null
+    if (extra && event.button === 0) {
+      event.preventDefault()
+      const line = Number(extra.dataset.line)
+      const isMark = extra.classList.contains('dsk-code-editor__mark')
+      this.dom.dispatchEvent(
+        new CustomEvent(isMark ? 'dsk:gutter-mark' : 'dsk:annotation', {
+          bubbles: true,
+          detail: {
+            ...(isMark ? this.gutterExtras.markAt(line) : this.gutterExtras.annotationAt(line)),
+            rect: extra.parentElement!.getBoundingClientRect(),
+          },
+        }),
+      )
+      return
+    }
     const marker = (event.target as Element).closest?.(
       '.dsk-code-editor__fold',
     ) as HTMLElement | null

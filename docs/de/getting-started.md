@@ -209,6 +209,26 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 Die Bereiche wandern mit Änderungen, bis die nächste Prüfung sie ersetzt.
 Falten und Prüfen lesen den ganzen Text; über 2 MB läuft beides nicht.
 
+## Marken und Anmerkungen im Rand
+
+```ts
+// Neben Zeilen (ab 0), ein Satz je Quelle: ein Diff zum letzten Commit, Haltepunkte …
+editor.setGutterMarks([{ line: 4, kind: 'added' }, { line: 9, kind: 'modified', title: 'geändert' }], 'diff')
+editor.setGutterMarks([], 'diff') // entfernt
+el.addEventListener('dsk:gutter-mark', (e) => peek(e.detail.line, e.detail.rect))
+
+// Eine Spalte kurzer Texte neben den Nummern (wer eine Zeile geändert hat, und wann).
+editor.setAnnotations([{ line: 0, text: 'Ann · 2 Tage', title: 'Ann <ann@example.com>, 1. Nov.' }])
+el.addEventListener('dsk:annotation', (e) => show(e.detail.line))
+editor.setAnnotations(null)
+```
+
+`added`, `modified` und `deleted` werden gezeichnet (ein Balken, ein Balken, eine
+Kerbe), in `--dsk-code-editor-added`, `-modified`, `-deleted`; eine andere Art
+bekommt die Klasse `dsk-code-editor__mark--<kind>`, damit die Seite sie zeichnet.
+Marken und Anmerkungen wandern beim Bearbeiten mit ihren Zeilen; die auf einer
+ersetzten Zeile verschwinden, bis die Seite sie neu setzt.
+
 ## Als Element
 
 ```ts

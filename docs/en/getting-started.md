@@ -205,6 +205,26 @@ el.addEventListener('dsk:diagnostics', (e) => show(e.detail.diagnostics))
 The ranges move with edits until the next check replaces them. Folding and
 the check read the whole text; above 2 MB neither runs.
 
+## Marks and annotations in the gutter
+
+```ts
+// Beside lines (0-based), one set per source: a diff against the last commit, breakpoints…
+editor.setGutterMarks([{ line: 4, kind: 'added' }, { line: 9, kind: 'modified', title: 'changed' }], 'diff')
+editor.setGutterMarks([], 'diff') // cleared
+el.addEventListener('dsk:gutter-mark', (e) => peek(e.detail.line, e.detail.rect))
+
+// A column of short text by the numbers (who changed a line, and when).
+editor.setAnnotations([{ line: 0, text: 'Ann · 2 days', title: 'Ann <ann@example.com>, 1 Nov' }])
+el.addEventListener('dsk:annotation', (e) => show(e.detail.line))
+editor.setAnnotations(null)
+```
+
+`added`, `modified` and `deleted` are drawn (a bar, a bar, a notch), in
+`--dsk-code-editor-added`, `-modified`, `-deleted`; another kind gets the class
+`dsk-code-editor__mark--<kind>` for the page to draw. Marks and annotations move
+with the lines as the text is edited; the ones on a replaced line go until the
+page sets them again.
+
 ## As an element
 
 ```ts
