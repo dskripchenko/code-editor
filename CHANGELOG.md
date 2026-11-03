@@ -1,5 +1,11 @@
 # @dskripchenko/code-editor
 
+## 0.1.1
+
+### Patch Changes
+
+- 72edc76: `editor.lineBreak` tells the line break in use (`\n` or `\r\n`); the editor sends `dsk:selection` (its `detail.selection`) whenever the cursors move or the text under them changes, for a status line.
+
 ## 0.1.0
 
 ### Minor Changes
