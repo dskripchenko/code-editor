@@ -108,10 +108,14 @@ for (const input of ['auto', 'textarea'] as const) {
           ([type, data]) => {
             const dt = new DataTransfer()
             if (data) dt.setData('text/plain', data)
-            document.activeElement!.dispatchEvent(
-              new ClipboardEvent(type!, { clipboardData: dt, bubbles: true, cancelable: true }),
-            )
-            return dt.getData('text/plain')
+            const event = new ClipboardEvent(type!, {
+              clipboardData: dt,
+              bubbles: true,
+              cancelable: true,
+            })
+            document.activeElement!.dispatchEvent(event)
+            // Firefox gives the event a copy of the data, not the object passed in.
+            return event.clipboardData!.getData('text/plain')
           },
           [type, data],
         )

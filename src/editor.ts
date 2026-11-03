@@ -49,6 +49,12 @@ const LONG_LINE = 10_000
 const LONG_MARGIN = 2000
 /** The text's left padding, in pixels (`.dsk-code-editor__lines`). */
 const PAD = 4
+/**
+ * The scrolled height is kept under this (Firefox stops at about 17.9 million
+ * pixels): a taller text scrolls through it proportionally, the lines in view
+ * placed by an offset.
+ */
+const MAX_HEIGHT = 8_000_000
 /** A line of printable ASCII and tabs: its columns are its pixels. */
 const SIMPLE = /^[\x20-\x7e\t]*$/
 
@@ -412,15 +418,17 @@ export class CodeEditor {
     const box = this.content.getBoundingClientRect()
     const index = Math.max(
       0,
-      Math.min(doc.lineCount - 1, Math.floor((clientY - box.top) / this.lineHeight)),
+      Math.min(
+        doc.lineCount - 1,
+        Math.floor((clientY - box.top - this.offsetY()) / this.lineHeight),
+      ),
     )
     const line = doc.line(index)
     const x = clientX - box.left - PAD
     const el =
       line.text.length > LONG_LINE || SIMPLE.test(line.text) ? null : this.lineElement(index)
     let ch: number | null = null
-    if (el)
-      ch = this.domOffset(el, clientX, box.top + index * this.lineHeight + this.lineHeight / 2)
+    if (el) ch = this.domOffset(el, clientX, box.top + this.lineTop(index) + this.lineHeight / 2)
     if (ch === null) ch = offsetAt(line.text, Math.round(x / this.charWidth), this.config.tabSize)
     // Never between the halves of a surrogate pair.
     const code = line.text.charCodeAt(ch)
@@ -457,13 +465,32 @@ export class CodeEditor {
       box.left + PAD + this.xAt(line.index, Math.min(line.text.length, pos - line.from + 1))
     return new DOMRect(
       left,
-      box.top + line.index * this.lineHeight,
+      box.top + this.lineTop(line.index),
       Math.max(right - left, this.charWidth),
       this.lineHeight,
     )
   }
 
   // Drawing ------------------------------------------------------------------
+
+  /** Text pixels per scrolled pixel: 1, unless the text is taller than `MAX_HEIGHT`. */
+  private scale(): number {
+    const real = this.editorState.doc.lineCount * this.lineHeight
+    if (real <= MAX_HEIGHT) return 1
+    const view = this.dom.clientHeight
+    return (real - view) / Math.max(1, MAX_HEIGHT - view)
+  }
+
+  /** Where text pixels are placed against the scrolled ones (0 unless scaled). */
+  private offsetY(): number {
+    const top = this.dom.scrollTop
+    return top - top * this.scale()
+  }
+
+  /** A line's top in the content's pixels. */
+  private lineTop(index: number): number {
+    return index * this.lineHeight + this.offsetY()
+  }
 
   private schedule(): void {
     if (this.frame) return
@@ -477,7 +504,7 @@ export class CodeEditor {
     const count = this.editorState.doc.lineCount
     const height = this.dom.clientHeight
     if (height === 0) return { from: 0, to: Math.min(count, 2 * BUFFER) }
-    const top = this.dom.scrollTop
+    const top = this.dom.scrollTop * this.scale()
     return {
       from: Math.max(0, Math.floor(top / this.lineHeight) - BUFFER),
       to: Math.min(count, Math.ceil((top + height) / this.lineHeight) + BUFFER),
@@ -489,7 +516,7 @@ export class CodeEditor {
     const count = doc.lineCount
     this.gutterWidth = this.showNumbers ? Math.ceil(String(count).length * this.charWidth + 20) : 0
     this.gutter.style.width = `${this.gutterWidth}px`
-    this.sizer.style.height = `${count * this.lineHeight}px`
+    this.sizer.style.height = `${Math.min(count * this.lineHeight, MAX_HEIGHT)}px`
     if (this.longest.version !== doc.version)
       this.longest = { version: doc.version, length: doc.longestLine() }
     this.content.style.minWidth = `${Math.ceil(PAD * 2 + (this.longest.length + 2) * this.charWidth)}px`
@@ -525,10 +552,10 @@ export class CodeEditor {
       }
       this.linesEl.replaceChildren(lines)
       this.gutterLines.replaceChildren(numbers)
-      this.linesEl.style.transform = `translateY(${from * this.lineHeight}px)`
-      this.gutterLines.style.transform = this.linesEl.style.transform
       this.drawn = { from, to, version: doc.version, longLeft }
     }
+    this.linesEl.style.transform = `translateY(${this.lineTop(from)}px)`
+    this.gutterLines.style.transform = this.linesEl.style.transform
     this.drawLayers()
   }
 
@@ -565,7 +592,7 @@ export class CodeEditor {
             ? this.xAt(i, r.to - b.from)
             : this.xAt(i, line.text.length) + this.charWidth / 2
         selections.append(
-          rect('dsk-code-editor__selection', PAD + x1, i * lh, Math.max(0, x2 - x1)),
+          rect('dsk-code-editor__selection', PAD + x1, this.lineTop(i), Math.max(0, x2 - x1)),
         )
       }
       const head = r.head === r.from ? a : b
@@ -574,7 +601,7 @@ export class CodeEditor {
           rect(
             'dsk-code-editor__cursor',
             PAD + this.xAt(head.index, r.head - head.from),
-            head.index * lh,
+            this.lineTop(head.index),
             2,
           ),
         )
@@ -582,13 +609,15 @@ export class CodeEditor {
     }
     for (const i of active)
       if (i >= first && i < last)
-        selections.prepend(rect('dsk-code-editor__active-line', 0, i * lh, 0))
+        selections.prepend(rect('dsk-code-editor__active-line', 0, this.lineTop(i), 0))
     for (const c of this.composition) {
       const a = doc.lineAt(c.from)
       if (a.index < first || a.index >= last || c.to <= c.from) continue
       const x1 = this.xAt(a.index, c.from - a.from)
       const x2 = this.xAt(a.index, Math.min(c.to, a.to) - a.from)
-      cursors.append(rect('dsk-code-editor__composition', PAD + x1, a.index * lh, x2 - x1, lh - 1))
+      cursors.append(
+        rect('dsk-code-editor__composition', PAD + x1, this.lineTop(a.index), x2 - x1, lh - 1),
+      )
     }
     this.selectionsEl.replaceChildren(selections)
     this.cursorsEl.replaceChildren(cursors)
@@ -599,7 +628,10 @@ export class CodeEditor {
     // The input sits at the main cursor: the IME's window opens there.
     const main = selection.main
     const line = doc.lineAt(main.head)
-    const local = { left: PAD + this.xAt(line.index, main.head - line.from), top: line.index * lh }
+    const local = {
+      left: PAD + this.xAt(line.index, main.head - line.from),
+      top: this.lineTop(line.index),
+    }
     const box = this.content.getBoundingClientRect()
     this.input.place(
       new DOMRect(box.left + local.left, box.top + local.top, 1, lh),
@@ -615,9 +647,12 @@ export class CodeEditor {
     const lh = this.lineHeight
     const top = line.index * lh
     const { scrollTop, clientHeight, scrollLeft, clientWidth } = this.dom
+    // In the text's own pixels (a scaled scroll is converted back at the end).
+    const scale = this.scale()
+    const virtual = scrollTop * scale
     let y = scrollTop
-    if (top < scrollTop) y = top
-    else if (top + lh > scrollTop + clientHeight) y = top + lh - clientHeight
+    if (top < virtual) y = top / scale
+    else if (top + lh > virtual + clientHeight) y = (top + lh - clientHeight) / scale
     const x = PAD + this.xAt(line.index, head - line.from)
     const visible = clientWidth - this.gutterWidth
     let left = scrollLeft

@@ -25,6 +25,11 @@ test('a file of a million lines (~50 MB): opened, scrolled, edited at both ends'
   await expect(
     page.locator('#host .dsk-code-editor__gutter-lines > .dsk-code-editor__line--active'),
   ).toHaveText('1000000')
+  // Taller than a browser lets an element be: the scroll is scaled, a click still lands on its line.
+  await page
+    .locator('#host .dsk-code-editor__lines > .dsk-code-editor__line', { hasText: 'line 999998 ' })
+    .click({ position: { x: 2, y: 5 } })
+  await page.keyboard.type('>')
   await page.keyboard.press(`${MOD}+Home`)
   const typed = await page.evaluate(async () => {
     const ed = (
@@ -52,6 +57,12 @@ test('a file of a million lines (~50 MB): opened, scrolled, edited at both ends'
     return [v.slice(0, 52), v.slice(-12)]
   })
   expect(ends).toEqual(['a'.repeat(50) + 'li', 'xxxxxxxxxEND'])
+  const marked = await page.evaluate(() =>
+    (
+      window as unknown as { ed: { state: { doc: { lineText(i: number): string } } } }
+    ).ed.state.doc.lineText(999_998),
+  )
+  expect(marked.startsWith('>line 999998 ')).toBe(true)
 })
 
 test('a long line is drawn around the columns in view', async ({ page }) => {
