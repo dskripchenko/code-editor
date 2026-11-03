@@ -8,9 +8,11 @@ A code editor for the browser — **no framework**, **no dependencies** beyond
 [`@dskripchenko/syntax`](https://github.com/dskripchenko/syntax) for
 highlighting. A class on an element, or a `<dsk-code-editor>` element.
 
-> **Status: 0.0.x — the frame.** It shows a text's lines with their numbers
-> and gives the text back with its line breaks as they were. Editing lands in
-> 0.1.0; the plan is in [docs/internal/adr-001-code-editor.md](docs/internal/adr-001-code-editor.md).
+> **Status: 0.0.x — editing without highlighting.** Typing (IME included),
+> moving and selecting by keys and pointer, undo and redo, the clipboard,
+> files of a million lines. Highlighting while typing comes next, the editing
+> commands people expect in 0.1.0; the plan is in
+> [docs/internal/adr-001-code-editor.md](docs/internal/adr-001-code-editor.md).
 
 ```ts
 import { CodeEditor, defineCodeEditor } from '@dskripchenko/code-editor'
@@ -18,8 +20,11 @@ import { CodeEditor, defineCodeEditor } from '@dskripchenko/code-editor'
 const editor = new CodeEditor(document.getElementById('editor')!, {
   value: 'const answer = 42\n',
   language: 'typescript',
+  onChange: (e) => save(e.value),
 })
-editor.value // 'const answer = 42\n' — line breaks (LF or CRLF) and the final one kept
+editor.value // 'const answer = 42\n' — line breaks (LF or CRLF) kept as in the file
+editor.setSelection(6, 12)
+editor.undo()
 
 // Or as an element:
 defineCodeEditor()

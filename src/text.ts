@@ -33,3 +33,9 @@ export function writeText(text: Text): string {
   const body = text.lines.join(text.lineBreak)
   return text.finalBreak ? body + text.lineBreak : body
 }
+
+/** The line break a text uses: the first one met (`\n` when there is none). */
+export function detectLineBreak(text: string): LineBreak {
+  const first = text.indexOf('\n')
+  return first > 0 && text[first - 1] === '\r' ? '\r\n' : '\n'
+}
