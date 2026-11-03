@@ -2,7 +2,8 @@
  * `<dsk-code-editor>`: the editor as an element. The text is the `value`
  * property or, in markup, a `<script type="text/plain">` inside the element
  * (so that nothing in the text is read as HTML); the language is the
- * `language` attribute.
+ * `language` attribute, `readonly` makes it read-only. Every change of the
+ * text sends `dsk:change` (its `detail.source` is the text).
  */
 import { CodeEditor } from './editor'
 
@@ -26,7 +27,7 @@ export function defineCodeEditor(
   if (registry.get(tag)) return
 
   class DskCodeEditor extends HTMLElement {
-    static observedAttributes = ['language']
+    static observedAttributes = ['language', 'readonly']
     editor: CodeEditor | null = null
     private pending: string | null = null
 
@@ -52,7 +53,11 @@ export function defineCodeEditor(
       if (this.editor) return
       const value = this.pending ?? this.sourceText()
       this.pending = null
-      this.editor = new CodeEditor(this, { value, language: this.language ?? undefined })
+      this.editor = new CodeEditor(this, {
+        value,
+        language: this.language ?? undefined,
+        readOnly: this.hasAttribute('readonly'),
+      })
     }
 
     disconnectedCallback(): void {
@@ -64,7 +69,9 @@ export function defineCodeEditor(
     }
 
     attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
-      if (name === 'language' && this.editor) this.editor.language = value
+      if (!this.editor) return
+      if (name === 'language') this.editor.language = value
+      if (name === 'readonly') this.editor.readOnly = value !== null
     }
 
     private sourceText(): string {
