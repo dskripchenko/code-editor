@@ -20,6 +20,8 @@ export class Folding {
   private hidden: [number, number][] = []
   /** Hidden lines before each run, for the mapping. */
   private before: number[] = []
+  /** Bumped each time the hidden lines change (a layout over it measures again). */
+  version = 0
 
   /** Sets what can be folded; folds that no longer can are opened. */
   setAvailable(ranges: readonly Fold[]): boolean {
@@ -199,6 +201,7 @@ export class Folding {
   }
 
   private rebuild(): void {
+    this.version++
     const runs = [...this.folded]
       .filter(([start, end]) => end > start)
       .map(([start, end]): [number, number] => [start + 1, end])

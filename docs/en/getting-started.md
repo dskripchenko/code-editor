@@ -20,6 +20,7 @@ const editor = new CodeEditor(document.getElementById('editor')!, {
   value: text,
   language: 'typescript', // an id from @dskripchenko/syntax
   lineNumbers: true, // the default
+  lineWrapping: false, // long lines wrap at the view's width (see Wrapping)
   readOnly: false,
   tabSize: 4, // columns a tab takes
   indentUnit: '    ', // what Tab inserts
@@ -160,6 +161,17 @@ settings.endOfLine // 'lf' | 'crlf'; insertFinalNewline, trimTrailingWhitespace 
 A click puts the cursor, a drag selects (and scrolls past the edge), Shift
 extends, a double click takes the word, a triple click the line, Alt+click
 adds a cursor.
+
+## Wrapping
+
+`lineWrapping: true` (or `editor.lineWrapping = true` at any time) wraps a
+long line at the view's width into rows: after the last space that fits, or
+where the row is full for a word longer than it; tabs reach their stop and
+CJK and emoji take two columns. Nothing scrolls sideways then. Up and down go
+row by row, keeping the column within the row; a click lands on the row under
+the pointer; selections, matches and diagnostics are drawn on every row they
+cover. The rows follow the view's width as it is resized. Lines longer than
+10 000 characters stay unwrapped (drawn in part, scrolled sideways).
 
 ## Highlighting
 

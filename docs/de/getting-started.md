@@ -21,6 +21,7 @@ const editor = new CodeEditor(document.getElementById('editor')!, {
   value: text,
   language: 'typescript', // eine Sprach-ID aus @dskripchenko/syntax
   lineNumbers: true, // Standard
+  lineWrapping: false, // lange Zeilen umbrechen an der Breite der Ansicht (siehe Umbruch)
   readOnly: false,
   tabSize: 4, // Spalten eines Tabs
   indentUnit: '    ', // was Tab einfügt
@@ -162,6 +163,18 @@ settings.endOfLine // 'lf' | 'crlf'; insertFinalNewline, trimTrailingWhitespace 
 Ein Klick setzt den Cursor, Ziehen wählt aus (und scrollt über den Rand),
 Shift erweitert, ein Doppelklick nimmt das Wort, ein Dreifachklick die Zeile,
 Alt+Klick fügt einen Cursor hinzu.
+
+## Umbruch
+
+`lineWrapping: true` (oder jederzeit `editor.lineWrapping = true`) bricht eine
+lange Zeile an der Breite der Ansicht in Reihen um: nach dem letzten Leerzeichen,
+das passt, oder wo die Reihe voll ist, für ein Wort, das länger ist; Tabs gehen
+bis zu ihrem Stopp, CJK und Emoji nehmen zwei Spalten. Seitlich scrollt dann
+nichts. Auf und ab gehen Reihe für Reihe, die Spalte in der Reihe bleibt; ein
+Klick landet in der Reihe unter dem Zeiger; Auswahl, Treffer und Diagnosen
+werden auf jeder Reihe gezeichnet, die sie berühren. Die Reihen folgen der
+Breite der Ansicht beim Größenändern. Zeilen über 10 000 Zeichen bleiben
+ungebrochen (teilweise gezeichnet, seitlich gescrollt).
 
 ## Hervorhebung
 

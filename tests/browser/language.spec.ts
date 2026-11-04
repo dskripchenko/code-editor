@@ -154,18 +154,24 @@ test('made outside the page, then shown: its lines measured, a point is the line
     const target = page.locator('#late .dsk-code-editor__line', { hasText: /^line 40$/ })
     await page.evaluate(() => (window as unknown as { ed: { goToLine(n: number): void } }).ed.goToLine(40))
     await expect(target).toBeVisible()
-    await expect.poll(async () => (await target.boundingBox())!.height).toBe(height)
-    const box = (await target.boundingBox())!
-    const pos = await page.evaluate(
-      ([x, y]) =>
-        (window as unknown as { ed: { posAtPoint(x: number, y: number): number } }).ed.posAtPoint(
-          x!,
-          y!,
-        ),
-      [box.x + 20, box.y + box.height / 2],
-    )
-    const value = await page.evaluate(() => (window as unknown as W).ed.value)
-    expect(value.slice(0, pos).split('\n').length).toBe(40)
+    // The line's element is drawn again as the editor measures: read it whole, in one go.
+    await expect
+      .poll(() =>
+        page.evaluate((h) => {
+          const el = [...document.querySelectorAll<HTMLElement>('#late .dsk-code-editor__line')].find(
+            (e) => e.textContent === 'line 40',
+          )
+          if (!el) return -1
+          const r = el.getBoundingClientRect()
+          if (Math.round(r.height) !== h) return -1
+          const w = window as unknown as {
+            ed: { posAtPoint(x: number, y: number): number; value: string }
+          }
+          const pos = w.ed.posAtPoint(r.left + 20, r.top + r.height / 2)
+          return w.ed.value.slice(0, pos).split('\n').length
+        }, height),
+      )
+      .toBe(40)
   }
   await check(27)
   // The page changes the line height later (another mode, a setting).

@@ -144,3 +144,37 @@ export function fillLine(
     if (pos >= to) break
   }
 }
+
+/**
+ * A drawn line broken into rows at these offsets (ascending): a `<br>` where
+ * each row starts, inside whatever span holds that character. The text nodes
+ * keep every character, so offsets read from the DOM stay the text's.
+ */
+export function breakLine(el: HTMLElement, breaks: readonly number[]): void {
+  if (breaks.length === 0) return
+  const d = el.ownerDocument
+  const walker = d.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text)
+  let k = 0
+  let pos = 0
+  for (const node of nodes) {
+    let cur = node
+    let start = pos
+    const end = pos + node.length
+    while (k < breaks.length && breaks[k]! < end) {
+      const at = breaks[k]! - start
+      if (at <= 0) {
+        // At this node's start: the break goes before it.
+        cur.parentNode!.insertBefore(d.createElement('br'), cur)
+      } else {
+        const rest = cur.splitText(at)
+        rest.parentNode!.insertBefore(d.createElement('br'), rest)
+        cur = rest
+        start += at
+      }
+      k++
+    }
+    pos = end
+  }
+}

@@ -58,8 +58,9 @@ import { detectLineBreak, type LineBreak } from './text'
 import { columnAt, offsetAt } from './text-measure'
 import { Diagnostics, fromValidation, type Diagnostic } from './view/diagnostics'
 import { Folding, type Fold } from './view/folding'
+import { Layout } from './view/wrap'
 import { Gutter, type Annotation, type GutterMark } from './view/gutter'
-import { fillLine, Highlighting } from './view/highlight'
+import { breakLine, fillLine, Highlighting } from './view/highlight'
 import { createInput, type Input, type InputHost } from './view/input'
 
 export interface CodeEditorOptions {
@@ -69,6 +70,8 @@ export interface CodeEditorOptions {
   language?: string
   /** Line numbers beside the text (on by default). */
   lineNumbers?: boolean
+  /** Long lines wrap at the view's width into rows (off by default: they scroll sideways). */
+  lineWrapping?: boolean
   /** Shown and selectable, not editable. */
   readOnly?: boolean
   /** Columns a tab takes (4). */
@@ -162,6 +165,9 @@ export class CodeEditor {
   }
   private readonly highlighting: Highlighting
   private readonly folding = new Folding()
+  /** Lines to rows on screen: folding, and wrapping when it is on. */
+  private readonly layout: Layout
+  private wrapOn = false
   private readonly gutterExtras = new Gutter()
   private readonly diagnosticsModel = new Diagnostics()
   private readonly validating: boolean
@@ -247,6 +253,15 @@ export class CodeEditor {
     this.showNumbers = options.lineNumbers !== false
     this.gutter.hidden = !this.showNumbers
     this.readOnlyFlag = options.readOnly ?? false
+    this.layout = new Layout(
+      this.folding,
+      (i) => this.editorState.doc.lineText(i),
+      () => this.editorState.doc.lineCount,
+      LONG_LINE,
+      () => this.editorState.doc.version,
+    )
+    this.wrapOn = options.lineWrapping ?? false
+    this.dom.classList.toggle('dsk-code-editor--wrap', this.wrapOn)
     this.content.setAttribute('aria-readonly', String(this.readOnlyFlag))
     this.onChange = options.onChange
     this.validating = options.validate !== false
@@ -302,7 +317,9 @@ export class CodeEditor {
             this.schedule()
           })
     this.resize?.observe(this.dom)
+    // The ruler's height (the line height) and its sample's width (the font): either changing measures again.
     this.resize?.observe(this.ruler)
+    this.resize?.observe(this.ruler.firstElementChild!)
     this.draw()
   }
 
@@ -344,6 +361,21 @@ export class CodeEditor {
 
   get language(): string | null {
     return this.lang
+  }
+
+  /** Whether long lines wrap at the view's width. */
+  get lineWrapping(): boolean {
+    return this.wrapOn
+  }
+
+  set lineWrapping(on: boolean) {
+    if (on === this.wrapOn) return
+    this.wrapOn = on
+    this.dom.classList.toggle('dsk-code-editor--wrap', on)
+    if (!on) this.layout.setWrap(null, this.config.tabSize)
+    this.drawn.version = -1
+    this.draw()
+    this.scrollToCursor()
   }
 
   /** Set to another language, the text is highlighted again; one not known leaves it plain. */
@@ -837,11 +869,30 @@ export class CodeEditor {
     const count = this.editorState.doc.lineCount
     return {
       pageLines: this.pageLines(),
-      rows: {
-        count: folding.rowCount(count),
-        rowOf: (line) => folding.rowOf(line),
-        lineOf: (row) => folding.lineOf(row),
-      },
+      rows: this.layout.wrapping
+        ? {
+            count: this.layout.count,
+            rowOf: (line) => this.layout.rowOf(line),
+            lineOf: (row) => this.layout.lineOf(row),
+            // Up and down go by the rows a wrapped line makes, its column within its row kept.
+            rowOfPos: (pos) => {
+              const line = this.editorState.doc.lineAt(pos)
+              return this.layout.rowOf(line.index) + this.layout.segmentOf(line.index, pos - line.from)
+            },
+            goalOf: (pos) => {
+              const line = this.editorState.doc.lineAt(pos)
+              const seg = this.layout.segmentOf(line.index, pos - line.from)
+              const start = seg > 0 ? this.layout.breaksOf(line.index)[seg - 1]! : 0
+              const tab = this.config.tabSize
+              return columnAt(line.text, pos - line.from, tab) - columnAt(line.text, start, tab)
+            },
+            posAtRow: (row, goal) => this.posAtRow(row, goal),
+          }
+        : {
+            count: folding.rowCount(count),
+            rowOf: (line) => folding.rowOf(line),
+            lineOf: (row) => folding.lineOf(row),
+          },
       language: languageEditing(this.languageId),
     }
   }
@@ -964,7 +1015,7 @@ export class CodeEditor {
   /** A position's place in the content's pixels: its left, its line's top and bottom. */
   private localAt(pos: number): { left: number; top: number; bottom: number } {
     const line = this.editorState.doc.lineAt(pos)
-    const top = this.lineTop(line.index)
+    const top = this.posTop(line.index, pos - line.from)
     return { left: PAD + this.xAt(line.index, pos - line.from), top, bottom: top + this.lineHeight }
   }
 
@@ -975,8 +1026,12 @@ export class CodeEditor {
     const pos = this.posAtCoords(event.clientX, event.clientY)
     const line = this.editorState.doc.lineAt(pos)
     // Past a line's end there is nothing to tell.
-    const end =
-      this.content.getBoundingClientRect().left + PAD + this.xAt(line.index, line.text.length)
+    // The end of the row under the pointer (a wrapped line's rows end where they break).
+    const ch = pos - line.from
+    const seg = this.layout.segmentOf(line.index, ch)
+    const breaks = this.layout.breaksOf(line.index)
+    const endX = seg < breaks.length ? this.xAt(line.index, breaks[seg]! - 1) + this.charWidth : this.xAt(line.index, line.text.length)
+    const end = this.content.getBoundingClientRect().left + PAD + endX
     this.hoverLater(event.clientX > end ? null : pos)
   }
 
@@ -1101,7 +1156,8 @@ export class CodeEditor {
   /** The cursor's line in the middle of the view (a jump far away). */
   private centerCursor(): void {
     const { doc, selection } = this.editorState
-    const row = this.folding.rowOf(doc.lineAt(selection.main.head).index)
+    const head = doc.lineAt(selection.main.head)
+    const row = this.layout.rowOf(head.index) + this.layout.segmentOf(head.index, selection.main.head - head.from)
     const top = row * this.lineHeight - this.dom.clientHeight / 2
     this.dom.scrollTop = Math.max(0, top / this.scale())
     this.draw()
@@ -1156,7 +1212,13 @@ export class CodeEditor {
   private xAt(index: number, ch: number): number {
     const text = this.editorState.doc.lineText(index)
     const el = text.length > LONG_LINE || SIMPLE.test(text) ? null : this.lineElement(index)
-    if (!el) return columnAt(text, ch, this.config.tabSize) * this.charWidth
+    if (!el) {
+      // Within its row: a wrapped line's later rows start at the left edge again.
+      const seg = this.layout.segmentOf(index, ch)
+      const start = seg > 0 ? this.layout.breaksOf(index)[seg - 1]! : 0
+      const tab = this.config.tabSize
+      return (columnAt(text, ch, tab) - columnAt(text, start, tab)) * this.charWidth
+    }
     if (text === '') return 0
     const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT)
     let rest = ch
@@ -1185,19 +1247,33 @@ export class CodeEditor {
   private posAtCoords(clientX: number, clientY: number): number {
     const doc = this.editorState.doc
     const box = this.content.getBoundingClientRect()
-    const rows = this.folding.rowCount(doc.lineCount)
+    const rows = this.layout.count
     const row = Math.max(
       0,
       Math.min(rows - 1, Math.floor((clientY - box.top - this.offsetY()) / this.lineHeight)),
     )
-    const index = this.folding.lineOf(row)
+    const index = this.layout.lineOf(row)
     const line = doc.line(index)
     const x = clientX - box.left - PAD
+    // The row of the line the point is on (a wrapped line has several), and its text's range.
+    const seg = Math.min(row - this.layout.rowOf(index), this.layout.rowsOf(index) - 1)
+    const breaks = this.layout.breaksOf(index)
+    const segFrom = seg > 0 ? breaks[seg - 1]! : 0
+    const segTo = seg < breaks.length ? breaks[seg]! : line.text.length
     const el =
       line.text.length > LONG_LINE || SIMPLE.test(line.text) ? null : this.lineElement(index)
     let ch: number | null = null
-    if (el) ch = this.domOffset(el, clientX, box.top + this.lineTop(index) + this.lineHeight / 2)
-    if (ch === null) ch = offsetAt(line.text, Math.round(x / this.charWidth), this.config.tabSize)
+    if (el) {
+      const y = box.top + this.lineTop(index) + (seg + 0.5) * this.lineHeight
+      ch = this.domOffset(el, clientX, y)
+    }
+    if (ch === null) {
+      const tab = this.config.tabSize
+      const col = Math.round(x / this.charWidth) + columnAt(line.text, segFrom, tab)
+      ch = offsetAt(line.text, col, tab)
+    }
+    // Past a wrapped row's end: its last character, not the next row's first.
+    if (seg < breaks.length) ch = Math.min(Math.max(ch, segFrom), Math.max(segFrom, segTo - 1))
     // Never between the halves of a surrogate pair.
     const code = line.text.charCodeAt(ch)
     if (code >= 0xdc00 && code <= 0xdfff) ch--
@@ -1233,7 +1309,7 @@ export class CodeEditor {
       box.left + PAD + this.xAt(line.index, Math.min(line.text.length, pos - line.from + 1))
     return new DOMRect(
       left,
-      box.top + this.lineTop(line.index),
+      box.top + this.posTop(line.index, pos - line.from),
       Math.max(right - left, this.charWidth),
       this.lineHeight,
     )
@@ -1243,7 +1319,7 @@ export class CodeEditor {
 
   /** Text pixels per scrolled pixel: 1, unless the text is taller than `MAX_HEIGHT`. */
   private scale(): number {
-    const real = this.folding.rowCount(this.editorState.doc.lineCount) * this.lineHeight
+    const real = this.layout.count * this.lineHeight
     if (real <= MAX_HEIGHT) return 1
     const view = this.dom.clientHeight
     return (real - view) / Math.max(1, MAX_HEIGHT - view)
@@ -1257,7 +1333,50 @@ export class CodeEditor {
 
   /** A line's top in the content's pixels. */
   private lineTop(index: number): number {
-    return this.folding.rowOf(index) * this.lineHeight + this.offsetY()
+    return this.layout.rowOf(index) * this.lineHeight + this.offsetY()
+  }
+
+  /** The top of the row a position of a line is on (a wrapped line has several). */
+  private posTop(index: number, ch: number): number {
+    return this.lineTop(index) + this.layout.segmentOf(index, ch) * this.lineHeight
+  }
+
+  /** The position at a column of a row (moving up and down through wrapped lines). */
+  private posAtRow(row: number, goal: number): number {
+    const doc = this.editorState.doc
+    const index = this.layout.lineOf(row)
+    const line = doc.line(index)
+    const seg = Math.min(Math.max(0, row - this.layout.rowOf(index)), this.layout.rowsOf(index) - 1)
+    const breaks = this.layout.breaksOf(index)
+    const from = seg > 0 ? breaks[seg - 1]! : 0
+    const to = seg < breaks.length ? breaks[seg]! : line.text.length
+    const tab = this.config.tabSize
+    const ch = offsetAt(line.text, columnAt(line.text, from, tab) + goal, tab)
+    // Within the row: past a wrapped row's end is its last character.
+    return line.from + Math.min(Math.max(ch, from), seg < breaks.length ? Math.max(from, to - 1) : to)
+  }
+
+  /**
+   * The pieces of a line's range from `a` to `b` (offsets in it), one per row
+   * it covers: their left and right x and their row's top.
+   */
+  private pieces(index: number, a: number, b: number): { x1: number; x2: number; top: number }[] {
+    const breaks = this.layout.breaksOf(index)
+    const top = this.lineTop(index)
+    if (breaks.length === 0) return [{ x1: this.xAt(index, a), x2: this.xAt(index, b), top }]
+    const out: { x1: number; x2: number; top: number }[] = []
+    const text = this.editorState.doc.lineText(index)
+    for (let seg = 0; seg <= breaks.length; seg++) {
+      const from = seg > 0 ? breaks[seg - 1]! : 0
+      const to = seg < breaks.length ? breaks[seg]! : text.length
+      const s = Math.max(a, from)
+      const e = Math.min(b, to)
+      if (s > e || (s === e && !(a === b && s === a))) continue
+      // A row's end, mid-line: up to its last character's right edge.
+      const x2 = e === to && seg < breaks.length ? this.xAt(index, to - 1) + this.charWidth : this.xAt(index, e)
+      out.push({ x1: this.xAt(index, s), x2, top: top + seg * this.lineHeight })
+    }
+    return out
   }
 
   private schedule(): void {
@@ -1270,7 +1389,7 @@ export class CodeEditor {
 
   /** The rows in view, with a margin. */
   private viewport(): { from: number; to: number } {
-    const count = this.folding.rowCount(this.editorState.doc.lineCount)
+    const count = this.layout.count
     const height = this.dom.clientHeight
     if (height === 0) return { from: 0, to: Math.min(count, 2 * BUFFER) }
     const top = this.dom.scrollTop * this.scale()
@@ -1292,14 +1411,20 @@ export class CodeEditor {
     this.gutterLines.style.paddingLeft = `${8 + annotation}px`
     this.gutterLines.style.setProperty('--dsk-code-editor-annotation-width', `${annotation}px`)
     this.gutter.style.width = `${this.gutterWidth}px`
-    const rows = this.folding.rowCount(count)
+    // Wrapping: the columns the view holds beside the gutter (measured again as it resizes).
+    if (this.wrapOn) {
+      const cols = Math.floor((this.dom.clientWidth - this.gutterWidth - 3 * PAD) / this.charWidth) - 1
+      if (this.layout.setWrap(Math.max(8, cols), this.config.tabSize)) this.drawn.version = -1
+    }
+    const rows = this.layout.count
     this.sizer.style.height = `${Math.min(rows * this.lineHeight, MAX_HEIGHT)}px`
     if (this.longest.version !== doc.version)
       this.longest = { version: doc.version, length: doc.longestLine() }
-    this.content.style.minWidth = `${Math.ceil(PAD * 2 + (this.longest.length + 2) * this.charWidth)}px`
+    // Wrapped, the text never needs to be wider than the view.
+    this.content.style.minWidth = this.wrapOn ? '' : `${Math.ceil(PAD * 2 + (this.longest.length + 2) * this.charWidth)}px`
 
     const view = this.viewport()
-    const visible = this.folding.linesOfRows(view.from, view.to, count)
+    const visible = this.layout.linesOfRows(view.from, view.to)
     const from = visible[0] ?? 0
     const to = visible.length ? visible[visible.length - 1]! + 1 : 0
     const cols = Math.ceil(this.dom.clientWidth / this.charWidth)
@@ -1330,6 +1455,12 @@ export class CodeEditor {
           fillLine(line, text, row, longLeft, longLeft + cols + 2 * LONG_MARGIN)
           line.style.paddingLeft = `${longLeft * this.charWidth}px`
         } else fillLine(line, text, row)
+        // A wrapped line: a break where each of its rows starts, as tall as its rows.
+        const breaks = this.layout.breaksOf(i)
+        if (breaks.length) {
+          breakLine(line, breaks)
+          line.style.height = `${(breaks.length + 1) * this.lineHeight}px`
+        }
         lines.append(line)
         if (this.showNumbers) {
           const n = d.createElement('div')
@@ -1339,6 +1470,7 @@ export class CodeEditor {
             n.title = mark.messages.join('\n')
           }
           n.append(String(i + 1))
+          if (breaks.length) n.style.height = `${(breaks.length + 1) * this.lineHeight}px`
           const gm = this.gutterExtras.markAt(i)
           if (gm) {
             const bar = d.createElement('span')
@@ -1410,14 +1542,14 @@ export class CodeEditor {
       for (let i = Math.max(first, a.index); i <= Math.min(last - 1, b.index) && !r.empty; i++) {
         if (this.folding.isHidden(i)) continue
         const line = i === a.index ? a : i === b.index ? b : doc.line(i)
-        const x1 = i === a.index ? this.xAt(i, r.from - a.from) : 0
-        const x2 =
-          i === b.index
-            ? this.xAt(i, r.to - b.from)
-            : this.xAt(i, line.text.length) + this.charWidth / 2
-        selections.append(
-          rect('dsk-code-editor__selection', PAD + x1, this.lineTop(i), Math.max(0, x2 - x1)),
-        )
+        const from = i === a.index ? r.from - a.from : 0
+        const to = i === b.index ? r.to - b.from : line.text.length
+        const pieces = this.pieces(i, from, to)
+        pieces.forEach((p, k) => {
+          // A line's end inside the selection: half a character more, as before.
+          const tail = k === pieces.length - 1 && i !== b.index ? this.charWidth / 2 : 0
+          selections.append(rect('dsk-code-editor__selection', PAD + p.x1, p.top, Math.max(0, p.x2 - p.x1 + tail)))
+        })
       }
       const head = r.head === r.from ? a : b
       if (head.index >= first && head.index < last) {
@@ -1425,7 +1557,7 @@ export class CodeEditor {
           rect(
             'dsk-code-editor__cursor',
             PAD + this.xAt(head.index, r.head - head.from),
-            this.lineTop(head.index),
+            this.posTop(head.index, r.head - head.from),
             2,
           ),
         )
@@ -1433,24 +1565,23 @@ export class CodeEditor {
     }
     for (const i of active)
       if (i >= first && i < last)
-        selections.prepend(rect('dsk-code-editor__active-line', 0, this.lineTop(i), 0))
+        selections.prepend(rect('dsk-code-editor__active-line', 0, this.lineTop(i), 0, this.layout.rowsOf(i) * lh))
     // The search's matches in view, and the bracket pair at the cursor: behind the text.
     if (this.pattern && last > first) {
       const main = selection.main
       for (const m of matchesIn(doc, this.pattern, first, last, 2000)) {
         const line = doc.lineAt(m.from)
         if (this.folding.isHidden(line.index)) continue
-        const x1 = this.xAt(line.index, m.from - line.from)
-        const x2 = this.xAt(line.index, m.to - line.from)
         const current = m.from === main.from && m.to === main.to
-        selections.append(
-          rect(
-            `dsk-code-editor__match${current ? ' dsk-code-editor__match--current' : ''}`,
-            PAD + x1,
-            this.lineTop(line.index),
-            Math.max(2, x2 - x1),
-          ),
-        )
+        for (const p of this.pieces(line.index, m.from - line.from, Math.min(m.to, line.to) - line.from))
+          selections.append(
+            rect(
+              `dsk-code-editor__match${current ? ' dsk-code-editor__match--current' : ''}`,
+              PAD + p.x1,
+              p.top,
+              Math.max(2, p.x2 - p.x1),
+            ),
+          )
       }
     }
     const pair = this.bracketPair()
@@ -1459,13 +1590,12 @@ export class CodeEditor {
         const line = doc.lineAt(pos)
         if (line.index < first || line.index >= last || this.folding.isHidden(line.index)) continue
         const x1 = this.xAt(line.index, pos - line.from)
-        const x2 = this.xAt(line.index, pos - line.from + 1)
         selections.append(
           rect(
             'dsk-code-editor__bracket',
             PAD + x1,
-            this.lineTop(line.index),
-            Math.max(2, x2 - x1),
+            this.posTop(line.index, pos - line.from),
+            Math.max(2, this.charWidth),
           ),
         )
       }
@@ -1477,29 +1607,28 @@ export class CodeEditor {
       for (let i = Math.max(first, a.index); i <= Math.min(last - 1, b.index); i++) {
         if (this.folding.isHidden(i)) continue
         const line = i === a.index ? a : i === b.index ? b : doc.line(i)
-        const x1 = i === a.index ? this.xAt(i, g.from - a.from) : 0
-        let x2 = i === b.index ? this.xAt(i, g.to - b.from) : this.xAt(i, line.text.length)
-        // An empty range (an error at the end of the text): a mark a character wide.
-        if (x2 - x1 < 2) x2 = x1 + this.charWidth
-        cursors.append(
-          rect(
-            `dsk-code-editor__diagnostic dsk-code-editor__diagnostic--${g.severity}`,
-            PAD + x1,
-            this.lineTop(i) + lh - 4,
-            x2 - x1,
-            4,
-          ),
-        )
+        const from = i === a.index ? g.from - a.from : 0
+        const to = i === b.index ? g.to - b.from : line.text.length
+        for (const p of this.pieces(i, from, to)) {
+          // An empty range (an error at the end of the text): a mark a character wide.
+          const x2 = p.x2 - p.x1 < 2 ? p.x1 + this.charWidth : p.x2
+          cursors.append(
+            rect(
+              `dsk-code-editor__diagnostic dsk-code-editor__diagnostic--${g.severity}`,
+              PAD + p.x1,
+              p.top + lh - 4,
+              x2 - p.x1,
+              4,
+            ),
+          )
+        }
       }
     }
     for (const c of this.composition) {
       const a = doc.lineAt(c.from)
       if (a.index < first || a.index >= last || c.to <= c.from) continue
-      const x1 = this.xAt(a.index, c.from - a.from)
-      const x2 = this.xAt(a.index, Math.min(c.to, a.to) - a.from)
-      cursors.append(
-        rect('dsk-code-editor__composition', PAD + x1, this.lineTop(a.index), x2 - x1, lh - 1),
-      )
+      for (const p of this.pieces(a.index, c.from - a.from, Math.min(c.to, a.to) - a.from))
+        cursors.append(rect('dsk-code-editor__composition', PAD + p.x1, p.top, p.x2 - p.x1, lh - 1))
     }
     this.selectionsEl.replaceChildren(selections)
     this.cursorsEl.replaceChildren(cursors)
@@ -1515,7 +1644,7 @@ export class CodeEditor {
     const line = doc.lineAt(main.head)
     const local = {
       left: PAD + this.xAt(line.index, main.head - line.from),
-      top: this.lineTop(line.index),
+      top: this.posTop(line.index, main.head - line.from),
     }
     const box = this.content.getBoundingClientRect()
     this.input.place(
@@ -1530,7 +1659,7 @@ export class CodeEditor {
     const head = selection.main.head
     const line = doc.lineAt(head)
     const lh = this.lineHeight
-    const top = this.folding.rowOf(line.index) * lh
+    const top = (this.layout.rowOf(line.index) + this.layout.segmentOf(line.index, head - line.from)) * lh
     const { scrollTop, clientHeight, scrollLeft, clientWidth } = this.dom
     // In the text's own pixels (a scaled scroll is converted back at the end).
     const scale = this.scale()
@@ -1541,7 +1670,9 @@ export class CodeEditor {
     const x = PAD + this.xAt(line.index, head - line.from)
     const visible = clientWidth - this.gutterWidth
     let left = scrollLeft
-    if (x < scrollLeft + this.charWidth) left = Math.max(0, x - 4 * this.charWidth)
+    // Wrapped, nothing is off to the side.
+    if (this.wrapOn) left = 0
+    else if (x < scrollLeft + this.charWidth) left = Math.max(0, x - 4 * this.charWidth)
     else if (x > scrollLeft + visible - 2 * this.charWidth) left = x - visible + 4 * this.charWidth
     if (y !== scrollTop || left !== scrollLeft) {
       this.dom.scrollTop = y

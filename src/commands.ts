@@ -28,6 +28,10 @@ export interface CommandContext {
     readonly count: number
     rowOf(line: number): number
     lineOf(row: number): number
+    /** Wrapped lines: the row a position is on, its column within that row, the position at a row's column. */
+    rowOfPos?(pos: number): number
+    goalOf?(pos: number): number
+    posAtRow?(row: number, goal: number): number
   }
   /** The language's comments, pairs and indentation (C-like ones without it). */
   readonly language?: LanguageEditing
@@ -92,9 +96,17 @@ const docEnd: Move = (state) => SelectionRange.cursor(state.doc.length)
 function vertical(lines: (context: CommandContext) => number): Move {
   return (state, r, context) => {
     const { tabSize } = state.config
+    const rows = context.rows
+    // Wrapped lines: by the rows they make, the column within the row kept.
+    if (rows?.rowOfPos && rows.goalOf && rows.posAtRow) {
+      const goal = r.goal ?? rows.goalOf(r.head)
+      const row = rows.rowOfPos(r.head) + lines(context)
+      if (row < 0) return SelectionRange.cursor(0, goal)
+      if (row >= rows.count) return SelectionRange.cursor(state.doc.length, goal)
+      return SelectionRange.cursor(rows.posAtRow(row, goal), goal)
+    }
     const line = state.doc.lineAt(r.head)
     const goal = r.goal ?? columnAt(line.text, r.head - line.from, tabSize)
-    const rows = context.rows
     const row = (rows ? rows.rowOf(line.index) : line.index) + lines(context)
     if (row < 0) return SelectionRange.cursor(0, goal)
     if (row >= (rows ? rows.count : state.doc.lineCount))
