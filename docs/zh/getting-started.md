@@ -18,6 +18,7 @@ const editor = new CodeEditor(document.getElementById('editor')!, {
   value: text,
   language: 'typescript', // @dskripchenko/syntax 中的语言 id
   lineNumbers: true, // 默认开启
+  lineWrapping: false, // 长行按视图宽度折行（见“自动换行”）
   readOnly: false,
   tabSize: 4, // 制表符占用的列数
   indentUnit: '    ', // Tab 键插入的内容
@@ -147,6 +148,10 @@ settings.endOfLine // 'lf' | 'crlf'；insertFinalNewline、trimTrailingWhitespac
 
 单击放置光标，拖动选择（越过边缘时自动滚动），Shift 扩展，双击选中单词，三击选中整行，
 Alt+单击添加光标。
+
+## 自动换行
+
+`lineWrapping: true`（或随时设置 `editor.lineWrapping = true`）按视图宽度把长行折成多行：在能容纳的最后一个空格之后折行，比一行还长的单词在行满处折断；制表符走到其制表位，中日韩文字和表情符号占两列。此时不会横向滚动。上下方向键按显示行移动，并保持行内列位置；点击落在指针所在的显示行；选区、匹配和诊断在它们覆盖的每一显示行上绘制。调整视图宽度时，折行随之更新。超过 10 000 个字符的行不折行（部分绘制、横向滚动）。
 
 ## 高亮
 
